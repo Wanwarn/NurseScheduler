@@ -2,6 +2,24 @@ import streamlit as st
 from ortools.sat.python import cp_model
 import pandas as pd
 import calendar
+import os # อย่าลืม import os
+
+CSV_FILE = "leave_requests.csv"
+
+def load_requests_from_csv():
+    if os.path.exists(CSV_FILE):
+        df = pd.read_csv(CSV_FILE)
+        return df.to_dict('records')
+    return []
+
+def save_requests_to_csv():
+    if st.session_state.requests:
+        df = pd.DataFrame(st.session_state.requests)
+        df.to_csv(CSV_FILE, index=False)
+    else:
+        # ถ้าไม่มีข้อมูล ให้ลบไฟล์ทิ้ง หรือสร้างไฟล์ว่าง
+        if os.path.exists(CSV_FILE):
+            os.remove(CSV_FILE)
 
 # --- Helper Function ---
 def get_week_occurrence(day):
@@ -94,11 +112,17 @@ def solve_schedule(year, month, days_in_month, nurses, requests):
 
     # จัดการคำขอ (Requests)
     for req in requests:
-        if req['nurse'] in nurses:
-            if req['type'] == 'Off':
-                model.Add(shifts_var[(req['nurse'], req['date'], 'O')] == 1)
-            elif req['type'] == 'Leave_Train':
-                model.Add(shifts_var[(req['nurse'], req['date'], 'L_T')] == 1)
+        # FIX: ตรวจสอบว่าเป็นของเดือน/ปี ปัจจุบันหรือไม่?
+        # (ต้องใช้ .get() เผื่อข้อมูลเก่าไม่มี key month/year)
+        req_month = req.get('month', month) 
+        req_year = req.get('year', year)
+        
+        if req_month == month and req_year == year: # ต้องตรงกันเป๊ะๆ ถึงจะเอามาคิด
+           if req['nurse'] in nurses:
+                if req['type'] == 'Off':
+                    model.Add(shifts_var[(req['nurse'], req['date'], 'O')] == 1)
+                elif req['type'] == 'Leave_Train':
+                    model.Add(shifts_var[(req['nurse'], req['date'], 'L_T')] == 1)
 
     # ==========================================
     # 3. ระบบเกลี่ยเวร (Fairness Logic)
@@ -118,7 +142,7 @@ def solve_schedule(year, month, days_in_month, nurses, requests):
     for n1 in rotating_nurses:
         for n2 in rotating_nurses:
             if n1 == n2: continue
-            model.Add(total_work_per_nurse[n1] - total_work_per_nurse[n2] <= 2)
+            model.Add(total_work_per_nurse[n1] - total_work_per_nurse[n2] <= 1)
 
     # เป้าหมาย: พยายามทำตาม Soft Fix (Fix M) ให้มากที่สุดเท่าที่กฎความเท่าเทียมจะยอม
     model.Maximize(sum(preferred_constraints))
@@ -154,7 +178,8 @@ st.caption("Updated: คำนวณค่าเวรบ่าย/ดึก (36
 
 # Session State
 if 'schedule_df' not in st.session_state: st.session_state.schedule_df = None
-if 'requests' not in st.session_state: st.session_state.requests = []
+if 'requests' not in st.session_state: 
+    st.session_state.requests = load_requests_from_csv() # โหลดจากไฟล์เมื่อเริ่มโปรแกรม
 
 # Sidebar
 with st.sidebar:
@@ -172,11 +197,21 @@ with st.sidebar:
         r_type = st.radio("ประเภท", ["ขอหยุด (Off)", "ลา/ประชุม (นับงาน)"])
         r_dates = st.multiselect("เลือกวันที่", range(1, days_in_month + 1))
         
+        # แก้ไขส่วนบันทึกข้อมูล (เพิ่ม month และ year)
         if st.form_submit_button("เพิ่มรายการ") and r_dates:
             code = 'Off' if 'ขอหยุด' in r_type else 'Leave_Train'
             for d in r_dates:
-                st.session_state.requests.append({'nurse': r_nurse, 'date': d, 'type': code})
-            st.success("เพิ่มแล้ว")
+                # FIX: บันทึกเดือนและปีไปด้วย!
+                st.session_state.requests.append({
+                    'nurse': r_nurse,
+                    'date': d,
+                    'month': month,  # เพิ่มบรรทัดนี้ (เอาค่ามาจากตัวแปร month ด้านบน)
+                    'year': year,    # เพิ่มบรรทัดนี้
+                    'type': code
+                })
+            # เพิ่ม Code Save ลงไฟล์ทันทีตรงนี้ (ดูข้อ 3)
+            save_requests_to_csv() 
+            st.success("เพิ่มแล้ว (จำเดือน/ปี แม่นยำ!)")
 
     if st.session_state.requests:
         req_df = pd.DataFrame(st.session_state.requests)
@@ -215,7 +250,7 @@ if st.session_state.schedule_df is not None:
         # ใช้ data_editor แทน dataframe เพื่อให้แก้ไขได้
         edited_schedule = st.data_editor(
             st.session_state.schedule_df, 
-            use_container_width=True,
+            width='stretch',
             key="schedule_editor",
             num_rows="fixed"  # ไม่ให้เพิ่ม/ลบแถว
         )
@@ -275,7 +310,7 @@ if st.session_state.schedule_df is not None:
             })
             
         df_sum = pd.DataFrame(summary_data)
-        st.dataframe(df_sum, use_container_width=True)
+        st.dataframe(df_sum, width='stretch')
         
         # Download
         csv = df_sum.to_csv(index=False).encode('utf-8')
