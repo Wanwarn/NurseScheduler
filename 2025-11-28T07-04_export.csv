@@ -1,0 +1,11 @@
+﻿,Nurse,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31
+0,ER1,NCD,NCD,NCD,NCD,M,,,NCD,NCD,NCD,NCD,M,,,NCD,NCD,NCD,NCD,M,,,NCD,NCD,NCD,NCD,M,,,NCD,NCD,NCD
+1,ER2,M,S,M,,,S,M,M,,N,S,,M,S,M,,M,M,,M,M,,M,M,S,S,,,M,M,N
+2,ER3,,,M,M,,M,S,,,S,,M,N,N,S,S,M,M,,S,M,M,M,S,M,,M,M,,N,M
+3,ER4,,M,N,,,M,M,S,,ลา/อบรม,,ลา/อบรม,,,ลา/อบรม,S,M,S,S,,S,S,,N,M,S,M,M,,M,M
+4,ER5,S,M,,S,M,M,,M,M,M,S,,S,M,,,,S,,M,M,N,M,,M,,M,N,N,M,M
+5,ER6,,S,,,S,,M,,S,,M,S,M,M,M,N,N,,M,M,N,M,S,M,N,,S,M,M,,S
+6,ER7,S,,M,N,N,M,,,N,M,M,M,M,S,S,,S,,S,M,M,M,N,,S,,,M,,,
+7,ER8,N,M,,M,M,N,S,S,M,M,,N,,,,M,S,,M,S,S,S,S,,,N,S,S,S,S,
+8,ER9,M,N,S,S,,S,M,N,M,S,M,,S,M,M,M,,N,N,,,,,S,,M,M,,S,,
+9,ER10,M,,S,M,S,,N,M,S,,N,S,M,M,N,M,,M,,N,,,,M,,M,N,S,M,S,S
