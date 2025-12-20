@@ -1,0 +1,15 @@
+nurse,date,month,year,type
+ER2,11,1,2026,Leave_Train
+ER5,12,1,2026,Leave_Train
+ER5,25,1,2026,Off
+ER6,1,1,2026,Leave_Train
+ER3,10,1,2026,Leave_Train
+ER8,10,1,2026,Leave_Train
+ER8,25,1,2026,Leave_Train
+ER10,5,1,2026,Leave_Train
+ER4,17,1,2026,Leave_Train
+ER4,20,1,2026,Leave_Train
+ER4,18,1,2026,Off
+ER4,16,1,2026,Off
+ER4,19,1,2026,Off
+ER7,11,1,2026,Leave_Train

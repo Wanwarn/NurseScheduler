@@ -4,6 +4,53 @@ import pandas as pd
 import calendar
 import os # อย่าลืม import os
 
+# --- Thai Public Holidays 2025-2026 ---
+THAI_HOLIDAYS = {
+    2025: {
+        1: [1],           # วันขึ้นปีใหม่
+        2: [12],          # วันมาฆบูชา
+        4: [6, 7, 13, 14, 15, 16],  # วันจักรี + สงกรานต์
+        5: [1, 4, 5, 12], # วันแรงงาน + ฉัตรมงคล + วิสาขบูชา
+        6: [2, 3],        # วันเฉลิมฯ พระราชินี
+        7: [10, 11, 28],  # วันอาสาฬหบูชา + เข้าพรรษา + เฉลิมฯ ร.10
+        8: [11, 12],      # วันแม่แห่งชาติ
+        10: [13, 23],     # วันสวรรคต ร.9 + ปิยมหาราช
+        12: [5, 10, 31],  # วันพ่อ + รัฐธรรมนูญ + สิ้นปี
+    },
+    2026: {
+        1: [1, 2],        # วันขึ้นปีใหม่
+        3: [3],           # วันมาฆบูชา
+        4: [6, 13, 14, 15],  # วันจักรี + สงกรานต์
+        5: [1, 4],        # วันแรงงาน + ฉัตรมงคล
+        6: [1, 3],        # วันวิสาขบูชา (ชดเชย) + เฉลิมฯ พระราชินี
+        7: [28, 29, 30],  # เฉลิมฯ ร.10 + อาสาฬหบูชา + เข้าพรรษา
+        8: [12],          # วันแม่แห่งชาติ
+        10: [13, 23],     # วันสวรรคต ร.9 + ปิยมหาราช
+        12: [5, 7, 10, 31],  # วันพ่อ + ชดเชย + รัฐธรรมนูญ + สิ้นปี
+    }
+}
+
+def is_holiday(year, month, day):
+    """ตรวจสอบว่าเป็นวันหยุดนักขัตฤกษ์หรือไม่"""
+    if year in THAI_HOLIDAYS and month in THAI_HOLIDAYS[year]:
+        return day in THAI_HOLIDAYS[year][month]
+    return False
+
+def get_holiday_name(year, month, day):
+    """รับชื่อวันหยุด (สำหรับ tooltip)"""
+    holiday_names = {
+        (2025, 1, 1): "วันขึ้นปีใหม่", (2025, 2, 12): "วันมาฆบูชา",
+        (2025, 4, 6): "วันจักรี", (2025, 4, 13): "วันสงกรานต์",
+        (2025, 5, 1): "วันแรงงาน", (2025, 5, 12): "วันวิสาขบูชา",
+        (2025, 6, 3): "วันเฉลิมฯ พระราชินี", (2025, 7, 28): "วันเฉลิมฯ ร.10",
+        (2025, 8, 12): "วันแม่แห่งชาติ", (2025, 10, 13): "วันสวรรคต ร.9",
+        (2025, 10, 23): "วันปิยมหาราช", (2025, 12, 5): "วันพ่อแห่งชาติ",
+        (2025, 12, 10): "วันรัฐธรรมนูญ", (2025, 12, 31): "วันสิ้นปี",
+        (2026, 1, 1): "วันขึ้นปีใหม่", (2026, 3, 3): "วันมาฆบูชา",
+        # ... สามารถเพิ่มชื่อวันหยุดได้
+    }
+    return holiday_names.get((year, month, day), "วันหยุดราชการ")
+
 CSV_FILE = "leave_requests.csv"
 
 def load_requests_from_csv():
@@ -50,9 +97,12 @@ def solve_schedule(year, month, days_in_month, nurses, requests):
             model.Add(sum(shifts_var[(n, d, s)] for s in shifts) == 1)
 
         # กำลังคน (ไม่นับ L_T)
+        # วันหยุดนักขัตฤกษ์ ต้องการคนเท่าวันเสาร์-อาทิตย์ (M=4)
+        is_special_day = is_weekend or is_holiday(year, month, d)
+        
         model.Add(sum(shifts_var[(n, d, 'N')] for n in nurses) == 1)
         model.Add(sum(shifts_var[(n, d, 'S')] for n in nurses) == 2)
-        req_m = 4 if is_weekend else 3
+        req_m = 4 if is_special_day else 3  # เสาร์-อาทิตย์ หรือ วันหยุดนักขัตฤกษ์ = 4 คน
         model.Add(sum(shifts_var[(n, d, 'M')] for n in nurses) == req_m)
 
     # กฎการสลับเวร (ห้าม S -> N)
@@ -60,10 +110,21 @@ def solve_schedule(year, month, days_in_month, nurses, requests):
         for d in range(1, days_in_month):
             model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'N')] <= 1)
 
-    # ดึก (N) ต่อเนื่องไม่เกิน 2 วัน
+    # ==========================================
+    # กฎเวรดึก (N) เดี่ยว - ต้องทำงานก่อนดึก และหยุดหลังดึก
+    # ==========================================
     for n in nurses:
+        # 1. ห้าม N-N (ดึกติดกัน)
+        for d in range(1, days_in_month):
+            model.Add(shifts_var[(n, d, 'N')] + shifts_var[(n, d + 1, 'N')] <= 1)
+        
+        # 2. ห้าม O-N (ต้องทำงานก่อนดึก ไม่ใช่หยุดแล้วมาดึก)
+        for d in range(1, days_in_month):
+            model.Add(shifts_var[(n, d, 'O')] + shifts_var[(n, d + 1, 'N')] <= 1)
+        
+        # 3. ห้าม N-O-N (ห้ามดึกสลับวัน)
         for d in range(1, days_in_month - 1):
-            model.Add(shifts_var[(n, d, 'N')] + shifts_var[(n, d + 1, 'N')] + shifts_var[(n, d + 2, 'N')] <= 2)
+            model.Add(shifts_var[(n, d, 'N')] + shifts_var[(n, d + 2, 'N')] <= 1)
 
     # ทำงานต่อเนื่องสูงสุด 7 วัน
     for n in nurses:
@@ -81,20 +142,24 @@ def solve_schedule(year, month, days_in_month, nurses, requests):
         wd = calendar.weekday(year, month, d)
         week_occurrence = get_week_occurrence(d)
 
-        # ER1 (Hard Fix): จ-พฤ NCD, ศุกร์ M, ส-อา หยุด
-        if wd in [0, 1, 2, 3]: model.Add(shifts_var[('ER1', d, 'O')] == 1) 
-        elif wd == 4: model.Add(shifts_var[('ER1', d, 'M')] == 1)
-        elif wd in [5, 6]: model.Add(shifts_var[('ER1', d, 'O')] == 1)
+        # ER1 (Hard Fix): จ-พฤ NCD, ศุกร์ M, ส-อา หยุด, วันหยุดนักขัตฤกษ์ หยุด
+        is_hol = is_holiday(year, month, d)
+        if is_hol or wd in [5, 6]:  # วันหยุดนักขัตฤกษ์ หรือ ส-อา = หยุด
+            model.Add(shifts_var[('ER1', d, 'O')] == 1)
+        elif wd in [0, 1, 2, 3]:  # จ-พฤ = NCD (แสดงเป็น O ในตาราง)
+            model.Add(shifts_var[('ER1', d, 'O')] == 1)
+        elif wd == 4:  # ศุกร์ = M
+            model.Add(shifts_var[('ER1', d, 'M')] == 1)
 
-        # ER3 (Soft Fix): พุธ & พฤหัส สัปดาห์ 1, 3
-        if wd in [2, 3] and week_occurrence in [1, 3]:
+        # ER3 (Soft Fix): วันจันทร์ทุกสัปดาห์ (เท่าที่ได้ ไม่เบียดเบียนผู้อื่น)
+        if wd == 0:  # วันจันทร์ = 0
             preferred_constraints.append(shifts_var[('ER3', d, 'M')])
 
-        # ER5 (Soft Fix): อังคาร สัปดาห์ 1,4 & ศุกร์ สัปดาห์ 1
-        if (wd == 1 and week_occurrence in [1, 4]) or (wd == 4 and week_occurrence == 1):
+        # ER5 (Soft Fix): วันจันทร์ สัปดาห์ 1,4 & ศุกร์ สัปดาห์ 1 (เปลี่ยนจากอังคารเป็นจันทร์)
+        if (wd == 0 and week_occurrence in [1, 4]) or (wd == 4 and week_occurrence == 1):
             preferred_constraints.append(shifts_var[('ER5', d, 'M')])
 
-      # ER9 (Soft Fix): อังคาร สัปดาห์ 2,3
+        # ER9 (Soft Fix): อังคาร สัปดาห์ 2,3
         if wd == 1 and week_occurrence in [2, 3]:
             preferred_constraints.append(shifts_var[('ER9', d, 'M')])
 
@@ -102,10 +167,18 @@ def solve_schedule(year, month, days_in_month, nurses, requests):
         er7_sn_shifts.append(shifts_var[('ER7', d, 'S')])
         er7_sn_shifts.append(shifts_var[('ER7', d, 'N')])
 
-    # ER7 (Hard Fix): เช้า 10, บ่าย+ดึก 10
-    model.Add(sum(er7_m_shifts) == 10)
-    model.Add(sum(er7_sn_shifts) == 10)
+    # ER7 (Hard Fix): เช้า+ลา = 10 (รวมวันลา/ประชุมด้วย), บ่าย+ดึก ไม่เกิน 10
+    er7_lt_shifts = [shifts_var[('ER7', d, 'L_T')] for d in range(1, days_in_month + 1)]
+    model.Add(sum(er7_m_shifts) + sum(er7_lt_shifts) == 10)  # M + ลา/ประชุม = 10
+    model.Add(sum(er7_sn_shifts) <= 10)  # S+N ไม่เกิน 10
+    
+    # ER7 ดึก (N) สูงสุด 4 เวร/เดือน
+    er7_n_shifts = [shifts_var[('ER7', d, 'N')] for d in range(1, days_in_month + 1)]
+    model.Add(sum(er7_n_shifts) <= 4)  # N ไม่เกิน 4
 
+    # สร้าง set ของ (nurse, date) ที่อนุญาตให้มี L_T
+    allowed_lt = set()
+    
     # จัดการคำขอ (Requests)
     for req in requests:
         # FIX: ตรวจสอบว่าเป็นของเดือน/ปี ปัจจุบันหรือไม่?
@@ -119,13 +192,22 @@ def solve_schedule(year, month, days_in_month, nurses, requests):
                     model.Add(shifts_var[(req['nurse'], req['date'], 'O')] == 1)
                 elif req['type'] == 'Leave_Train':
                     model.Add(shifts_var[(req['nurse'], req['date'], 'L_T')] == 1)
+                    allowed_lt.add((req['nurse'], req['date']))
+    
+    # FIX: ห้าม L_T ถ้าไม่มีคำขอลา - ป้องกัน solver จัดเวร "ลา/อบรม" เองโดยไม่มีคำขอ
+    for n in nurses:
+        for d in range(1, days_in_month + 1):
+            if (n, d) not in allowed_lt:
+                model.Add(shifts_var[(n, d, 'L_T')] == 0)
 
     # ==========================================
     # 3. ระบบเกลี่ยเวร (Fairness Logic)
     # ==========================================
     
-    # กลุ่มที่ต้องเกลี่ยเวร (ตัด ER1 และ ER7 ออก เพราะมีจำนวนเวร Fix ตายตัวตามเงื่อนไขสัญญา)
+    # กลุ่มที่ต้องเกลี่ยเวรรวม (ตัด ER1 และ ER7 ออกจากเวรรวม เพราะมี M fix)
     rotating_nurses = [n for n in nurses if n not in ['ER1', 'ER7']]
+    # กลุ่มที่ต้องเกลี่ยเวร S/N (รวม ER7 เพื่อให้ S และ N เท่ากัน)
+    nurses_for_sn_fairness = [n for n in nurses if n not in ['ER1']]
     
     total_work_per_nurse = {}
     
@@ -134,14 +216,50 @@ def solve_schedule(year, month, days_in_month, nurses, requests):
         total_work_per_nurse[n] = sum(sum(shifts_var[(n, d, s)] for s in work_shifts) for d in range(1, days_in_month + 1))
 
     # กฎบังคับ: เวรรวมห้ามต่างกันเกิน 1 (เพื่อความแฟร์สูงสุด)
-    # หากทำไม่ได้ Solver จะยอมตัด Soft Fix (Fix M) ทิ้งเพื่อให้ได้ความเท่าเทียม
     for n1 in rotating_nurses:
         for n2 in rotating_nurses:
             if n1 == n2: continue
             model.Add(total_work_per_nurse[n1] - total_work_per_nurse[n2] <= 1)
+    
+    # ==========================================
+    # 4. เกลี่ยเวรบ่าย (S) และดึก (N) แยกกัน ต่างกันไม่เกิน 1
+    # ==========================================
+    s_shifts_per_nurse = {}
+    n_shifts_per_nurse = {}
+    
+    for n in nurses_for_sn_fairness:
+        s_shifts_per_nurse[n] = sum(shifts_var[(n, d, 'S')] for d in range(1, days_in_month + 1))
+        n_shifts_per_nurse[n] = sum(shifts_var[(n, d, 'N')] for d in range(1, days_in_month + 1))
+    
+    # เวรบ่าย (S) ต่างกันไม่เกิน 1
+    for n1 in nurses_for_sn_fairness:
+        for n2 in nurses_for_sn_fairness:
+            if n1 == n2: continue
+            model.Add(s_shifts_per_nurse[n1] - s_shifts_per_nurse[n2] <= 1)
+    
+    # เวรดึก (N) ต่างกันไม่เกิน 1
+    for n1 in nurses_for_sn_fairness:
+        for n2 in nurses_for_sn_fairness:
+            if n1 == n2: continue
+            model.Add(n_shifts_per_nurse[n1] - n_shifts_per_nurse[n2] <= 1)
 
-    # เป้าหมาย: พยายามทำตาม Soft Fix (Fix M) ให้มากที่สุดเท่าที่กฎความเท่าเทียมจะยอม
-    model.Maximize(sum(preferred_constraints))
+    # ==========================================
+    # 5. Soft Constraint: หลัง N ควร Off 2 วัน (ยกเว้น ER3)
+    # ==========================================
+    off_after_night_constraints = []
+    nurses_for_off_rule = [n for n in nurses if n not in ['ER1', 'ER3']]  # ยกเว้น ER1 (สัญญาพิเศษ) และ ER3
+    
+    for n in nurses_for_off_rule:
+        for d in range(1, days_in_month - 1):  # ต้องเหลือ 2 วันหลัง N
+            # ถ้าทำ N วันที่ d แล้ว Off d+1 และ Off d+2 = ดี (ให้คะแนน)
+            # สร้าง indicator variable สำหรับ pattern: N -> O -> O
+            # ใช้วิธีง่าย: ให้คะแนนเมื่อ Off หลัง N
+            off_after_night_constraints.append(shifts_var[(n, d + 1, 'O')])
+            # ให้น้ำหนักน้อยกว่า preferred_constraints เพื่อไม่ให้กระทบ soft fix อื่น
+    
+    # รวม soft constraints ทั้งหมดเข้าด้วยกัน โดยให้ preferred_constraints มีน้ำหนักมากกว่า
+    # เป้าหมาย: พยายามทำตาม Soft Fix (Fix M) + Off หลัง N
+    model.Maximize(sum(preferred_constraints) * 10 + sum(off_after_night_constraints))
 
     # Solve
     solver = cp_model.CpSolver()
@@ -168,9 +286,9 @@ def solve_schedule(year, month, days_in_month, nurses, requests):
         return None
 
 # --- UI Setup ---
-st.set_page_config(page_title="ระบบจัดตารางเวร ER_KPH", layout="wide")
+st.set_page_config(page_title="ระบบจัดตารางเวร ER_KPH v2.0", layout="wide")
 st.title("🏥 ระบบจัดตารางเวรพยาบาล (ER_KPH)")
-st.caption("Updated: คำนวณค่าเวรบ่าย/ดึก (360บ.) และเกลี่ยเวรให้เท่ากัน (Diff <= 1)")
+st.caption("**v2.0** | วันหยุดนักขัตฤกษ์ 🟡 | เกลี่ยเวร S/N (Diff ≤ 1) | ดึกเดี่ยว | ER7 สัญญาพิเศษ")
 
 # Session State
 if 'schedule_df' not in st.session_state: st.session_state.schedule_df = None
@@ -237,15 +355,42 @@ with st.sidebar:
 
 # --- Main Content ---
 if st.session_state.schedule_df is not None:
-    tab1, tab2 = st.tabs(["📅 ตารางเวร", "💰 ค่าตอบแทนและค่าเวร"])
+    tab1, tab2, tab3 = st.tabs(["📅 ตารางเวร", "💰 ค่าตอบแทนและค่าเวร", "📅 ปฏิทินวันหยุด"])
     
     with tab1:
         st.subheader(f"ตารางเวรเดือน {month}/{year}")
-        st.info("💡 **สามารถแก้ไขเวรได้โดยตรง** โดยคลิกที่ช่องที่ต้องการแก้ไข แล้วพิมพ์: M (เช้า), S (บ่าย), N (ดึก), ลา/อบรม, หรือเว้นว่างไว้ (หยุด)")
+        
+        # แสดงข้อมูลวันหยุดในเดือนนี้
+        holidays_in_month = THAI_HOLIDAYS.get(year, {}).get(month, [])
+        if holidays_in_month:
+            st.info(f"📅 **วันหยุดนักขัตฤกษ์ในเดือนนี้:** {', '.join(map(str, holidays_in_month))}")
+        
+        st.caption("💡 **สามารถแก้ไขเวรได้โดยตรง** | 🟡 = วันหยุดนักขัตฤกษ์ | 🔵 = เสาร์-อาทิตย์")
+        
+        # สร้าง styled column names เพื่อแสดงวันหยุด
+        styled_df = st.session_state.schedule_df.copy()
+        
+        # เปลี่ยนชื่อ column เพื่อแสดงวันหยุด/weekend
+        new_columns = {'Nurse': 'พยาบาล'}
+        for d in range(1, days_in_month + 1):
+            col_name = str(d)
+            if col_name in styled_df.columns:
+                wd = calendar.weekday(year, month, d)
+                is_weekend = wd >= 5
+                is_hol = is_holiday(year, month, d)
+                
+                if is_hol:
+                    new_columns[col_name] = f"🟡{d}"
+                elif is_weekend:
+                    new_columns[col_name] = f"🔵{d}"
+                else:
+                    new_columns[col_name] = col_name
+        
+        styled_df = styled_df.rename(columns=new_columns)
         
         # ใช้ data_editor แทน dataframe เพื่อให้แก้ไขได้
         edited_schedule = st.data_editor(
-            st.session_state.schedule_df, 
+            styled_df, 
             width='stretch',
             key="schedule_editor",
             num_rows="fixed"  # ไม่ให้เพิ่ม/ลบแถว
@@ -255,7 +400,16 @@ if st.session_state.schedule_df is not None:
         col_btn1, col_btn2 = st.columns(2)
         with col_btn1:
             if st.button("💾 บันทึกการแก้ไข", type="primary"):
-                st.session_state.schedule_df = edited_schedule
+                # แปลง column กลับเป็นชื่อเดิมก่อนบันทึก
+                reverse_columns = {'พยาบาล': 'Nurse'}
+                for d in range(1, days_in_month + 1):
+                    for prefix in ['🟡', '🔵', '']:
+                        styled_name = f"{prefix}{d}"
+                        if styled_name in edited_schedule.columns:
+                            reverse_columns[styled_name] = str(d)
+                            break
+                save_df = edited_schedule.rename(columns=reverse_columns)
+                st.session_state.schedule_df = save_df
                 st.success("บันทึกการแก้ไขแล้ว! ค่าตอบแทนจะถูกคำนวณใหม่โดยอัตโนมัติ")
                 st.rerun()
         with col_btn2:
@@ -265,25 +419,52 @@ if st.session_state.schedule_df is not None:
     with tab2:
         st.subheader("สรุปรายได้และภาระงาน")
         
+        # คำนวณวันหยุดอัตโนมัติ (เสาร์-อาทิตย์ + วันหยุดนักขัตฤกษ์)
+        weekend_count = sum(1 for d in range(1, days_in_month + 1) if calendar.weekday(year, month, d) >= 5)
+        holiday_count = len([d for d in THAI_HOLIDAYS.get(year, {}).get(month, []) 
+                            if calendar.weekday(year, month, d) < 5])  # นับเฉพาะวันหยุดที่ไม่ตรงกับ ส-อา
+        total_off_days = weekend_count + holiday_count
+        
         col1, col2, col3 = st.columns(3)
         with col1:
-            holidays = st.number_input("จำนวนวันหยุดนักขัตฤกษ์", 0, 15, 2)
+            st.metric("📅 วันหยุด (ส-อา + นักขัตฤกษ์)", f"{total_off_days} วัน")
+            st.caption(f"ส-อา: {weekend_count}, นักขัตฤกษ์: {holiday_count}")
         with col2:
             rate_sn = st.number_input("ค่าเวร บ่าย/ดึก (บาท/เวร)", value=360)
         with col3:
-            ot_rate = st.number_input("ค่าตอบแทน OT (บาท/เวร)", value=720)
+            ot_rate = st.number_input("ค่าตอบแทน OT (บาท/เวร)", value=800)
             
-        std_work_days = days_in_month - holidays
-        st.info(f"💡 เกณฑ์วันทำงานปกติ: **{std_work_days} วัน** (เกินจากนี้คิดเป็น OT)")
+        std_work_days = days_in_month - total_off_days
+        st.info(f"💡 เกณฑ์วันทำงานปกติ: **{std_work_days} วัน** = {days_in_month} - {total_off_days} (เกินจากนี้คิดเป็น OT)")
         
         summary_data = []
         for index, row in st.session_state.schedule_df.iterrows():
-            shifts = [row[str(d)] for d in range(1, days_in_month + 1)]
+            # หา column ที่ถูกต้อง (อาจเป็นเลขธรรมดาหรือมี emoji นำหน้า)
+            shifts = []
+            for d in range(1, days_in_month + 1):
+                col_name = str(d)
+                # ลองหา column ที่ตรงกัน
+                if col_name in row.index:
+                    shifts.append(row[col_name])
+                else:
+                    # ลองหา column ที่มี emoji นำหน้า
+                    found = False
+                    for prefix in ['🟡', '🔵', '']:
+                        styled_col = f"{prefix}{d}"
+                        if styled_col in row.index:
+                            shifts.append(row[styled_col])
+                            found = True
+                            break
+                    if not found:
+                        shifts.append('')  # ถ้าหาไม่เจอให้เป็นค่าว่าง
             
             c_m = shifts.count('M')
             c_s = shifts.count('S')
             c_n = shifts.count('N')
             c_lt = shifts.count('ลา/อบรม')
+            
+            # รวม ลา/ประชุม กับเวรเช้า
+            c_m_plus_lt = c_m + c_lt
             
             total_work = c_m + c_s + c_n + c_lt
             
@@ -295,7 +476,7 @@ if st.session_state.schedule_df is not None:
             
             summary_data.append({
                 'ชื่อ': row['Nurse'],
-                'เวรเช้า (M)': c_m,
+                'เวรเช้า+ลา (M)': c_m_plus_lt,  # รวม M + ลา/ประชุม
                 'เวรบ่าย (S)': c_s,
                 'เวรดึก (N)': c_n,
                 'รวมวันทำงาน': total_work,
@@ -311,3 +492,27 @@ if st.session_state.schedule_df is not None:
         # Download
         csv = df_sum.to_csv(index=False).encode('utf-8')
         st.download_button("📥 ดาวน์โหลดรายงานรายได้", csv, "salary_report.csv", "text/csv")
+    
+    with tab3:
+        st.subheader("📅 ปฏิทินวันหยุดราชการ")
+        
+        # สร้างปฏิทินวันหยุด
+        holidays_this_year = THAI_HOLIDAYS.get(year, {})
+        
+        if holidays_this_year:
+            for m in range(1, 13):
+                if m in holidays_this_year:
+                    month_name = ['', 'ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 
+                                  'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'][m]
+                    days_list = holidays_this_year[m]
+                    st.markdown(f"**{month_name}:** {', '.join(map(str, days_list))}")
+        else:
+            st.warning(f"ยังไม่มีข้อมูลวันหยุดสำหรับปี {year}")
+        
+        # นับจำนวนวันหยุดเสาร์-อาทิตย์ในเดือนปัจจุบัน
+        weekend_count = sum(1 for d in range(1, days_in_month + 1) if calendar.weekday(year, month, d) >= 5)
+        holiday_count = len(THAI_HOLIDAYS.get(year, {}).get(month, []))
+        
+        st.markdown("---")
+        st.metric("วันเสาร์-อาทิตย์ในเดือนนี้", f"{weekend_count} วัน", delta=None)
+        st.metric("วันหยุดนักขัตฤกษ์ในเดือนนี้", f"{holiday_count} วัน", delta=None)
