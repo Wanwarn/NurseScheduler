@@ -94,11 +94,7 @@ def solve_schedule(year, month, days_in_month, nurses, requests):
         if (wd == 1 and week_occurrence in [1, 4]) or (wd == 4 and week_occurrence == 1):
             preferred_constraints.append(shifts_var[('ER5', d, 'M')])
 
-        # ER8 (Soft Fix): อังคาร สัปดาห์ 2,3
-        if wd == 1 and week_occurrence in [2, 3]:
-            preferred_constraints.append(shifts_var[('ER8', d, 'M')])
-            
-        # ER9 (Soft Fix): อังคาร สัปดาห์ 2,3
+      # ER9 (Soft Fix): อังคาร สัปดาห์ 2,3
         if wd == 1 and week_occurrence in [2, 3]:
             preferred_constraints.append(shifts_var[('ER9', d, 'M')])
 
@@ -137,7 +133,7 @@ def solve_schedule(year, month, days_in_month, nurses, requests):
         # นับรวม M, S, N, L_T
         total_work_per_nurse[n] = sum(sum(shifts_var[(n, d, s)] for s in work_shifts) for d in range(1, days_in_month + 1))
 
-    # กฎบังคับ: เวรรวมห้ามต่างกันเกิน 2 (เพื่อความแฟร์สูงสุด)
+    # กฎบังคับ: เวรรวมห้ามต่างกันเกิน 1 (เพื่อความแฟร์สูงสุด)
     # หากทำไม่ได้ Solver จะยอมตัด Soft Fix (Fix M) ทิ้งเพื่อให้ได้ความเท่าเทียม
     for n1 in rotating_nurses:
         for n2 in rotating_nurses:
@@ -174,7 +170,7 @@ def solve_schedule(year, month, days_in_month, nurses, requests):
 # --- UI Setup ---
 st.set_page_config(page_title="ระบบจัดตารางเวร ER_KPH", layout="wide")
 st.title("🏥 ระบบจัดตารางเวรพยาบาล (ER_KPH)")
-st.caption("Updated: คำนวณค่าเวรบ่าย/ดึก (360บ.) และเกลี่ยเวรให้เท่ากัน (Diff <= 2)")
+st.caption("Updated: คำนวณค่าเวรบ่าย/ดึก (360บ.) และเกลี่ยเวรให้เท่ากัน (Diff <= 1)")
 
 # Session State
 if 'schedule_df' not in st.session_state: st.session_state.schedule_df = None
