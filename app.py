@@ -76,8 +76,9 @@ def get_week_occurrence(day):
 def solve_schedule(year, month, days_in_month, nurses, requests):
     model = cp_model.CpModel()
     
-    shifts = ['S', 'M', 'N', 'O', 'L_T'] 
-    work_shifts = ['S', 'M', 'N', 'L_T'] 
+    # เพิ่ม NS (บ่าย+ดึก 16 ชม.) เป็น OT shift
+    shifts = ['S', 'M', 'N', 'O', 'L_T', 'NS'] 
+    work_shifts = ['S', 'M', 'N', 'L_T', 'NS']  # NS นับเป็นวันทำงาน
 
     shifts_var = {}
     for n in nurses:
@@ -96,40 +97,82 @@ def solve_schedule(year, month, days_in_month, nurses, requests):
         for n in nurses:
             model.Add(sum(shifts_var[(n, d, s)] for s in shifts) == 1)
 
-        # กำลังคน (ไม่นับ L_T)
+        # กำลังคน (NS นับเป็นทั้ง S และ N)
         # วันหยุดนักขัตฤกษ์ ต้องการคนเท่าวันเสาร์-อาทิตย์ (M=4)
         is_special_day = is_weekend or is_holiday(year, month, d)
         
-        model.Add(sum(shifts_var[(n, d, 'N')] for n in nurses) == 1)
-        model.Add(sum(shifts_var[(n, d, 'S')] for n in nurses) == 2)
+        # N + NS >= 1 (ต้องมีคนทำดึกอย่างน้อย 1 คน, NS ช่วยได้)
+        model.Add(sum(shifts_var[(n, d, 'N')] + shifts_var[(n, d, 'NS')] for n in nurses) >= 1)
+        # S + NS >= 2 (ต้องมีคนทำบ่ายอย่างน้อย 2 คน, NS ช่วยได้)  
+        model.Add(sum(shifts_var[(n, d, 'S')] + shifts_var[(n, d, 'NS')] for n in nurses) >= 2)
         req_m = 4 if is_special_day else 3  # เสาร์-อาทิตย์ หรือ วันหยุดนักขัตฤกษ์ = 4 คน
         model.Add(sum(shifts_var[(n, d, 'M')] for n in nurses) == req_m)
 
-    # กฎการสลับเวร (ห้าม S -> N)
+    # กฎการสลับเวร (ห้าม S -> N, รวม NS ด้วย)
     for n in nurses:
         for d in range(1, days_in_month):
             model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'N')] <= 1)
+            model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'NS')] <= 1)
 
     # ==========================================
     # กฎเวรดึก (N) เดี่ยว - ต้องทำงานก่อนดึก และหยุดหลังดึก
     # ==========================================
     for n in nurses:
-        # 1. ห้าม N-N (ดึกติดกัน)
+        # 1. ห้าม N-N, NS-NS, N-NS, NS-N (ดึกติดกัน)
         for d in range(1, days_in_month):
             model.Add(shifts_var[(n, d, 'N')] + shifts_var[(n, d + 1, 'N')] <= 1)
+            model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 1, 'NS')] <= 1)
+            model.Add(shifts_var[(n, d, 'N')] + shifts_var[(n, d + 1, 'NS')] <= 1)
+            model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 1, 'N')] <= 1)
         
-        # 2. ห้าม O-N (ต้องทำงานก่อนดึก ไม่ใช่หยุดแล้วมาดึก)
+        # 2. ห้าม O-N, O-NS (ต้องทำงานก่อนดึก)
         for d in range(1, days_in_month):
             model.Add(shifts_var[(n, d, 'O')] + shifts_var[(n, d + 1, 'N')] <= 1)
+            model.Add(shifts_var[(n, d, 'O')] + shifts_var[(n, d + 1, 'NS')] <= 1)
         
-        # 3. ห้าม N-O-N (ห้ามดึกสลับวัน)
+        # 3. ห้าม N-O-N, NS-O-NS (ห้ามดึกสลับวัน)
         for d in range(1, days_in_month - 1):
             model.Add(shifts_var[(n, d, 'N')] + shifts_var[(n, d + 2, 'N')] <= 1)
+            model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 2, 'NS')] <= 1)
+            model.Add(shifts_var[(n, d, 'N')] + shifts_var[(n, d + 2, 'NS')] <= 1)
+            model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 2, 'N')] <= 1)
 
-    # ทำงานต่อเนื่องสูงสุด 7 วัน
+    # ==========================================
+    # กฎเวร NS (บ่าย+ดึก 16 ชม.) - OT Shift (ลดความซับซ้อน)
+    # ==========================================
+    nurses_for_ns = [n for n in nurses if n not in ['ER1', 'ER7']]  # ยกเว้น ER1, ER7
+    
+    for n in nurses_for_ns:
+        # NS ต้องห่างกันอย่างน้อย 4 วัน (ง่ายขึ้น)
+        for d in range(1, days_in_month - 3):
+            model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 1, 'NS')] + 
+                     shifts_var[(n, d + 2, 'NS')] + shifts_var[(n, d + 3, 'NS')] + 
+                     shifts_var[(n, d + 4, 'NS')] <= 1)
+        
+        # หลัง NS ต้อง Off วันถัดไป (1 วัน - hard)
+        for d in range(1, days_in_month):
+            # NS วันที่ d → วันที่ d+1 ห้ามทำงาน (ต้องเป็น O)
+            for work_s in ['S', 'M', 'N', 'NS']:
+                model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 1, work_s)] <= 1)
+    
+    # ER1 และ ER7 ห้ามทำ NS
+    for d in range(1, days_in_month + 1):
+        model.Add(shifts_var[('ER1', d, 'NS')] == 0)
+        model.Add(shifts_var[('ER7', d, 'NS')] == 0)
+
+    # ทำงานต่อเนื่องสูงสุด 7 วัน (รวม NS)
     for n in nurses:
         for d in range(1, days_in_month - 6):
             model.Add(sum(sum(shifts_var[(n, d + k, s)] for s in work_shifts) for k in range(8)) <= 7)
+    
+    # ป้องกัน NS หลังทำงานติด 6 วัน (เพราะ NS = 2 เวร จะทำให้เกิน 7 เวร)
+    for n in nurses_for_ns:
+        for d in range(7, days_in_month + 1):
+            # ถ้า 6 วันก่อนหน้าทำงานทั้งหมด แล้ววันนี้เป็น NS = 8 เวร (เกิน!)
+            # ดังนั้น ถ้าจะทำ NS ต้องมี Off อย่างน้อย 1 วันใน 6 วันก่อนหน้า
+            prev_work = sum(sum(shifts_var[(n, d - k, s)] for s in ['S', 'M', 'N', 'NS']) for k in range(1, 7))
+            # ถ้าทำงาน 6 วันก่อนหน้า (prev_work=6) แล้ว NS ห้าม
+            model.Add(prev_work + shifts_var[(n, d, 'NS')] <= 6)
 
     # ==========================================
     # 2. เงื่อนไขรายบุคคล (Preferences & Fix)
@@ -222,14 +265,31 @@ def solve_schedule(year, month, days_in_month, nurses, requests):
             model.Add(total_work_per_nurse[n1] - total_work_per_nurse[n2] <= 1)
     
     # ==========================================
+    # 3.1 วันหยุดของแต่ละคน = วันหยุดของเดือน (เสาร์-อาทิตย์ + นักขัตฤกษ์)
+    # ==========================================
+    # คำนวณจำนวนวันหยุดในเดือน
+    weekend_count = sum(1 for d in range(1, days_in_month + 1) if calendar.weekday(year, month, d) >= 5)
+    holiday_count = len([d for d in THAI_HOLIDAYS.get(year, {}).get(month, []) 
+                        if calendar.weekday(year, month, d) < 5])  # นับเฉพาะวันหยุดที่ไม่ตรงกับ ส-อา
+    target_off_days = weekend_count + holiday_count
+    
+    # กำหนดให้ทุกคน (ยกเว้น ER1) มีวันหยุดใกล้เคียงกับ target
+    for n in rotating_nurses:
+        off_days = sum(shifts_var[(n, d, 'O')] for d in range(1, days_in_month + 1))
+        # อนุญาตให้ Off ต่างจาก target ได้ ±2 (เพื่อความยืดหยุ่นกับกฎดึกเดี่ยว)
+        model.Add(off_days >= target_off_days - 2)
+        model.Add(off_days <= target_off_days + 2)
+    
+    # ==========================================
     # 4. เกลี่ยเวรบ่าย (S) และดึก (N) แยกกัน ต่างกันไม่เกิน 1
     # ==========================================
     s_shifts_per_nurse = {}
     n_shifts_per_nurse = {}
     
     for n in nurses_for_sn_fairness:
-        s_shifts_per_nurse[n] = sum(shifts_var[(n, d, 'S')] for d in range(1, days_in_month + 1))
-        n_shifts_per_nurse[n] = sum(shifts_var[(n, d, 'N')] for d in range(1, days_in_month + 1))
+        # NS นับเป็นทั้ง S และ N
+        s_shifts_per_nurse[n] = sum(shifts_var[(n, d, 'S')] + shifts_var[(n, d, 'NS')] for d in range(1, days_in_month + 1))
+        n_shifts_per_nurse[n] = sum(shifts_var[(n, d, 'N')] + shifts_var[(n, d, 'NS')] for d in range(1, days_in_month + 1))
     
     # เวรบ่าย (S) ต่างกันไม่เกิน 1
     for n1 in nurses_for_sn_fairness:
@@ -252,14 +312,24 @@ def solve_schedule(year, month, days_in_month, nurses, requests):
     for n in nurses_for_off_rule:
         for d in range(1, days_in_month - 1):  # ต้องเหลือ 2 วันหลัง N
             # ถ้าทำ N วันที่ d แล้ว Off d+1 และ Off d+2 = ดี (ให้คะแนน)
-            # สร้าง indicator variable สำหรับ pattern: N -> O -> O
-            # ใช้วิธีง่าย: ให้คะแนนเมื่อ Off หลัง N
             off_after_night_constraints.append(shifts_var[(n, d + 1, 'O')])
-            # ให้น้ำหนักน้อยกว่า preferred_constraints เพื่อไม่ให้กระทบ soft fix อื่น
     
-    # รวม soft constraints ทั้งหมดเข้าด้วยกัน โดยให้ preferred_constraints มีน้ำหนักมากกว่า
-    # เป้าหมาย: พยายามทำตาม Soft Fix (Fix M) + Off หลัง N
-    model.Maximize(sum(preferred_constraints) * 10 + sum(off_after_night_constraints))
+    # ==========================================
+    # 6. Soft Constraint: พยายามให้หยุด 2 วันติดกัน (O-O)
+    # ==========================================
+    consecutive_off_constraints = []
+    for n in rotating_nurses:
+        for d in range(1, days_in_month):
+            # ให้คะแนนเมื่อมี O-O ติดกัน
+            consecutive_off_constraints.append(shifts_var[(n, d, 'O')] + shifts_var[(n, d + 1, 'O')])
+    
+    # รวม soft constraints ทั้งหมดเข้าด้วยกัน
+    # น้ำหนัก: preferred_constraints (M fix) > consecutive_off > off_after_night
+    model.Maximize(
+        sum(preferred_constraints) * 100 + 
+        sum(consecutive_off_constraints) * 5 +
+        sum(off_after_night_constraints)
+    )
 
     # Solve
     solver = cp_model.CpSolver()
@@ -275,6 +345,7 @@ def solve_schedule(year, month, days_in_month, nurses, requests):
                     if solver.Value(shifts_var[(n, d, s)]):
                         display = s if s not in ['O'] else ""
                         if s == 'L_T': display = "ลา/อบรม"
+                        if s == 'NS': display = "NS"  # แสดง NS (บ่าย+ดึก)
                         if n == 'ER1' and s == 'O': 
                             wd = calendar.weekday(year, month, d)
                             if wd in [0, 1, 2, 3]: display = "NCD"
@@ -286,9 +357,9 @@ def solve_schedule(year, month, days_in_month, nurses, requests):
         return None
 
 # --- UI Setup ---
-st.set_page_config(page_title="ระบบจัดตารางเวร ER_KPH v2.0", layout="wide")
+st.set_page_config(page_title="ระบบจัดตารางเวร ER_KPH v2.1", layout="wide")
 st.title("🏥 ระบบจัดตารางเวรพยาบาล (ER_KPH)")
-st.caption("**v2.0** | วันหยุดนักขัตฤกษ์ 🟡 | เกลี่ยเวร S/N (Diff ≤ 1) | ดึกเดี่ยว | ER7 สัญญาพิเศษ")
+st.caption("**v2.1** | NS=บ่าย+ดึก(OT) | วันหยุดนักขัตฤกษ์ 🟡 | เกลี่ยเวร S/N | ดึกเดี่ยว")
 
 # Session State
 if 'schedule_df' not in st.session_state: st.session_state.schedule_df = None
@@ -461,24 +532,28 @@ if st.session_state.schedule_df is not None:
             c_m = shifts.count('M')
             c_s = shifts.count('S')
             c_n = shifts.count('N')
+            c_ns = shifts.count('NS')  # นับ NS แยก
             c_lt = shifts.count('ลา/อบรม')
             
             # รวม ลา/ประชุม กับเวรเช้า
             c_m_plus_lt = c_m + c_lt
             
-            total_work = c_m + c_s + c_n + c_lt
+            # NS นับเป็น 2 เวร (S+N) ในวันเดียว
+            total_work = c_m + c_s + c_n + c_ns + c_lt
             
             # คำนวณเงิน
-            shift_allowance = (c_s + c_n) * rate_sn # ค่าเวรบ่าย+ดึก
-            ot_shifts = max(0, total_work - std_work_days) # จำนวนเวร OT
-            ot_pay = ot_shifts * ot_rate # เงิน OT
-            total_income = shift_allowance + ot_pay # รวมเงินทั้งหมด
+            # NS ได้ค่าเวร 2 เท่า (บ่าย+ดึก)
+            shift_allowance = (c_s + c_n + c_ns * 2) * rate_sn  # NS = 2 เวร
+            ot_shifts = max(0, total_work - std_work_days) + c_ns  # NS นับเป็น OT ด้วย
+            ot_pay = ot_shifts * ot_rate  # เงิน OT
+            total_income = shift_allowance + ot_pay  # รวมเงินทั้งหมด
             
             summary_data.append({
                 'ชื่อ': row['Nurse'],
-                'เวรเช้า+ลา (M)': c_m_plus_lt,  # รวม M + ลา/ประชุม
+                'เวรเช้า+ลา (M)': c_m_plus_lt,
                 'เวรบ่าย (S)': c_s,
                 'เวรดึก (N)': c_n,
+                'NS (OT)': c_ns,  # แสดง NS แยก
                 'รวมวันทำงาน': total_work,
                 'ค่าเวร บ่าย/ดึก': f"{shift_allowance:,}",
                 'OT (เวร)': ot_shifts,
