@@ -66,6 +66,8 @@ NURSE_NAMES = {
 }
 
 CSV_FILE = "leave_requests.csv"
+FIX_REQUESTS_FILE = "fix_requests.csv"
+STAFFING_OVERRIDES_FILE = "staffing_overrides.csv"
 
 def load_requests_from_csv():
     if os.path.exists(CSV_FILE):
@@ -78,16 +80,52 @@ def save_requests_to_csv():
         df = pd.DataFrame(st.session_state.requests)
         df.to_csv(CSV_FILE, index=False)
     else:
-        # ถ้าไม่มีข้อมูล ให้ลบไฟล์ทิ้ง หรือสร้างไฟล์ว่าง
         if os.path.exists(CSV_FILE):
             os.remove(CSV_FILE)
+
+def load_fix_requests_from_csv():
+    if os.path.exists(FIX_REQUESTS_FILE):
+        df = pd.read_csv(FIX_REQUESTS_FILE)
+        # Convert dates string back to list
+        df['dates'] = df['dates'].apply(lambda x: [int(d) for d in str(x).split(',')] if pd.notna(x) else [])
+        return df.to_dict('records')
+    return []
+
+def save_fix_requests_to_csv():
+    if st.session_state.fix_requests:
+        df = pd.DataFrame(st.session_state.fix_requests)
+        # Convert dates list to comma-separated string for CSV
+        df['dates'] = df['dates'].apply(lambda x: ','.join(map(str, x)) if x else '')
+        df.to_csv(FIX_REQUESTS_FILE, index=False)
+    else:
+        if os.path.exists(FIX_REQUESTS_FILE):
+            os.remove(FIX_REQUESTS_FILE)
+
+def load_staffing_overrides_from_csv():
+    if os.path.exists(STAFFING_OVERRIDES_FILE):
+        df = pd.read_csv(STAFFING_OVERRIDES_FILE)
+        return df.to_dict('records')
+    return []
+
+def save_staffing_overrides_to_csv():
+    if st.session_state.staffing_overrides:
+        df = pd.DataFrame(st.session_state.staffing_overrides)
+        df.to_csv(STAFFING_OVERRIDES_FILE, index=False)
+    else:
+        if os.path.exists(STAFFING_OVERRIDES_FILE):
+            os.remove(STAFFING_OVERRIDES_FILE)
 
 # --- Helper Function ---
 def get_week_occurrence(day):
     return (day - 1) // 7 + 1
 
 # --- 1. ฟังก์ชันจัดตาราง (Scheduler Engine) ---
-def solve_schedule(year, month, days_in_month, nurses, requests, er5_er10_pattern='new'):
+def solve_schedule(year, month, days_in_month, nurses, requests, er5_er10_pattern='new', fix_requests=None, staffing_overrides=None):
+    if fix_requests is None:
+        fix_requests = []
+    if staffing_overrides is None:
+        staffing_overrides = []
+    
     model = cp_model.CpModel()
     
     # เพิ่ม NS (บ่าย+ดึก 16 ชม.) เป็น OT shift
@@ -115,10 +153,23 @@ def solve_schedule(year, month, days_in_month, nurses, requests, er5_er10_patter
         # วันหยุดนักขัตฤกษ์ ต้องการคนเท่าวันเสาร์-อาทิตย์ (M=4)
         is_special_day = is_weekend or is_holiday(year, month, d)
         
-        # N + NS >= 1 (ต้องมีคนทำดึกอย่างน้อย 1 คน, NS ช่วยได้)
-        model.Add(sum(shifts_var[(n, d, 'N')] + shifts_var[(n, d, 'NS')] for n in nurses) >= 1)
-        # S + NS >= 2 (ต้องมีคนทำบ่ายอย่างน้อย 2 คน, NS ช่วยได้)  
-        model.Add(sum(shifts_var[(n, d, 'S')] + shifts_var[(n, d, 'NS')] for n in nurses) >= 2)
+        # ค่า Default: N+NS >= 1, S+NS >= 2
+        n_req = 1
+        s_req = 2
+        
+        # ตรวจสอบ Override จาก staffing_overrides
+        for override in staffing_overrides:
+            if override.get('month') == month and override.get('year') == year:
+                if override.get('start', 1) <= d <= override.get('end', days_in_month):
+                    if override.get('shift') == 'N':
+                        n_req = override.get('count', 1)
+                    elif override.get('shift') == 'S':
+                        s_req = override.get('count', 2)
+        
+        # N + NS >= n_req
+        model.Add(sum(shifts_var[(n, d, 'N')] + shifts_var[(n, d, 'NS')] for n in nurses) >= n_req)
+        # S + NS >= s_req
+        model.Add(sum(shifts_var[(n, d, 'S')] + shifts_var[(n, d, 'NS')] for n in nurses) >= s_req)
         req_m = 4 if is_special_day else 3  # เสาร์-อาทิตย์ หรือ วันหยุดนักขัตฤกษ์ = 4 คน
         model.Add(sum(shifts_var[(n, d, 'M')] for n in nurses) == req_m)
 
@@ -228,12 +279,8 @@ def solve_schedule(year, month, days_in_month, nurses, requests, er5_er10_patter
             if wd == 4:
                 preferred_constraints.append(shifts_var[('ER10', d, 'M')])
 
-        # ER9 (Soft Fix): อังคาร สัปดาห์ 2,3 + สัปดาห์สุดท้าย 1 วัน (วันธรรมดาใดก็ได้)
-        if wd == 1 and week_occurrence in [2, 3]:
-            preferred_constraints.append(shifts_var[('ER9', d, 'M')])
-        # สัปดาห์สุดท้าย = วันที่เหลือน้อยกว่า 7 วันจนสิ้นเดือน (วันธรรมดา จ-ศ)
-        if d > days_in_month - 7 and wd < 5:  # วันธรรมดาในสัปดาห์สุดท้าย
-            preferred_constraints.append(shifts_var[('ER9', d, 'M')])
+        # [REMOVED] ER9 Hardcode - ใช้ fix_requests จาก UI แทน
+        # ตอนนี้ ER9 (และคนอื่น) สามารถขอเวร Fix ผ่าน UI ได้
 
         er7_m_shifts.append(shifts_var[('ER7', d, 'M')])
         er7_sn_shifts.append(shifts_var[('ER7', d, 'S')])
@@ -247,6 +294,19 @@ def solve_schedule(year, month, days_in_month, nurses, requests, er5_er10_patter
     # ER7 ดึก (N) สูงสุด 4 เวร/เดือน
     er7_n_shifts = [shifts_var[('ER7', d, 'N')] for d in range(1, days_in_month + 1)]
     model.Add(sum(er7_n_shifts) <= 4)  # N ไม่เกิน 4
+
+    # ==========================================
+    # 2.1 ขอเวร Fix จาก UI (Dynamic Shift Fix Requests)
+    # ==========================================
+    for req in fix_requests:
+        if req.get('month') == month and req.get('year') == year:
+            nurse = req.get('nurse')
+            shift = req.get('shift')
+            dates = req.get('dates', [])
+            if nurse in nurses and shift in ['M', 'S', 'N']:
+                for d in dates:
+                    if 1 <= d <= days_in_month:
+                        preferred_constraints.append(shifts_var[(nurse, d, shift)])
 
     # สร้าง set ของ (nurse, date) ที่อนุญาตให้มี L_T
     allowed_lt = set()
@@ -424,14 +484,18 @@ def solve_schedule(year, month, days_in_month, nurses, requests, er5_er10_patter
         return None
 
 # --- UI Setup ---
-st.set_page_config(page_title="ระบบจัดตารางเวร ER_KPH v2.2", layout="wide")
+st.set_page_config(page_title="ระบบจัดตารางเวร ER_KPH v2.3", layout="wide")
 st.title("🏥 ระบบจัดตารางเวรพยาบาล (ER_KPH)")
-st.caption("**v2.2** | 🆕 เกลี่ย ส-อา/นักขัตฤกษ์ | Separation ER2-ER7 | Pattern ER5/ER10 เลือกได้")
+st.caption("**v2.3** | 🆕 ขอเวร Fix ผ่าน UI | กำลังคนพิเศษตามช่วงวันที่ | เกลี่ย ส-อา/นักขัตฤกษ์")
 
 # Session State
 if 'schedule_df' not in st.session_state: st.session_state.schedule_df = None
 if 'requests' not in st.session_state: 
-    st.session_state.requests = load_requests_from_csv() # โหลดจากไฟล์เมื่อเริ่มโปรแกรม
+    st.session_state.requests = load_requests_from_csv()
+if 'fix_requests' not in st.session_state:
+    st.session_state.fix_requests = load_fix_requests_from_csv()
+if 'staffing_overrides' not in st.session_state:
+    st.session_state.staffing_overrides = load_staffing_overrides_from_csv()
 
 # Sidebar
 with st.sidebar:
@@ -483,18 +547,122 @@ with st.sidebar:
         # ปุ่ม Reset ล้างรายการวันลาทั้งหมด
         if st.button("🗑️ ล้างรายการวันลาทั้งหมด", type="secondary"):
             st.session_state.requests = []
+            save_requests_to_csv()
             st.rerun()
     
+    # ==========================================
+    # 📌 ขอเวร Fix (Shift Fix Request)
+    # ==========================================
+    st.markdown("---")
+    st.header("📌 ขอเวร Fix")
+    
+    with st.form("fix_form", clear_on_submit=True):
+        f_nurse = st.selectbox("ชื่อพยาบาล", nurses_list, key="fix_nurse")
+        f_shift = st.radio("ประเภทเวร", ["เช้า (M)", "บ่าย (S)", "ดึก (N)"], horizontal=True)
+        f_dates = st.multiselect("เลือกวันที่", range(1, days_in_month + 1), key="fix_dates")
+        
+        if st.form_submit_button("เพิ่มรายการ") and f_dates:
+            shift_code = {'เช้า (M)': 'M', 'บ่าย (S)': 'S', 'ดึก (N)': 'N'}[f_shift]
+            st.session_state.fix_requests.append({
+                'nurse': f_nurse,
+                'shift': shift_code,
+                'dates': f_dates,
+                'month': month,
+                'year': year
+            })
+            save_fix_requests_to_csv()
+            st.success(f"เพิ่มคำขอ Fix เวร {f_shift} สำหรับ {f_nurse} แล้ว!")
+    
+    if st.session_state.fix_requests:
+        # แสดงรายการ fix requests
+        fix_display = []
+        for req in st.session_state.fix_requests:
+            if req.get('month') == month and req.get('year') == year:
+                fix_display.append({
+                    'พยาบาล': req['nurse'],
+                    'เวร': req['shift'],
+                    'วันที่': ', '.join(map(str, req.get('dates', [])))
+                })
+        if fix_display:
+            st.dataframe(pd.DataFrame(fix_display), hide_index=True)
+        
+        if st.button("🗑️ ล้างคำขอ Fix ทั้งหมด", type="secondary"):
+            st.session_state.fix_requests = []
+            save_fix_requests_to_csv()
+            st.rerun()
+    
+    # ==========================================
+    # 👥 กำลังคนพิเศษ (Staffing Override)
+    # ==========================================
+    st.markdown("---")
+    st.header("👥 กำลังคนพิเศษ")
+    st.caption("กำหนดจำนวนคนที่ต้องการในช่วงวันที่เฉพาะ (แทนค่า default)")
+    
+    with st.form("staffing_form", clear_on_submit=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            s_start = st.number_input("ตั้งแต่วันที่", min_value=1, max_value=days_in_month, value=1)
+        with col2:
+            s_end = st.number_input("ถึงวันที่", min_value=1, max_value=days_in_month, value=10)
+        
+        s_shift = st.radio("ประเภทเวร", ["ดึก (N)", "บ่าย (S)"], horizontal=True)
+        s_count = st.number_input("จำนวนคน", min_value=1, max_value=5, value=2)
+        
+        if st.form_submit_button("เพิ่มรายการ"):
+            shift_code = 'N' if 'ดึก' in s_shift else 'S'
+            st.session_state.staffing_overrides.append({
+                'start': int(s_start),
+                'end': int(s_end),
+                'shift': shift_code,
+                'count': int(s_count),
+                'month': month,
+                'year': year
+            })
+            save_staffing_overrides_to_csv()
+            st.success(f"เพิ่มกำลังคนพิเศษ: วันที่ {s_start}-{s_end} เวร {s_shift} = {s_count} คน")
+    
+    if st.session_state.staffing_overrides:
+        # แสดงรายการ staffing overrides
+        staff_display = []
+        for ov in st.session_state.staffing_overrides:
+            if ov.get('month') == month and ov.get('year') == year:
+                staff_display.append({
+                    'วันที่': f"{ov['start']}-{ov['end']}",
+                    'เวร': ov['shift'],
+                    'จำนวนคน': ov['count']
+                })
+        if staff_display:
+            st.dataframe(pd.DataFrame(staff_display), hide_index=True)
+        
+        if st.button("🗑️ ล้างกำลังคนพิเศษทั้งหมด", type="secondary"):
+            st.session_state.staffing_overrides = []
+            save_staffing_overrides_to_csv()
+            st.rerun()
+    
+    # ==========================================
+    # ปุ่มควบคุม
+    # ==========================================
+    st.markdown("---")
+    
     # ปุ่มรีเซ็ตทุกอย่าง (ล้างวันลา + ล้างตารางเวรเก่า)
-    if st.button("🔄 รีเซ็ตทั้งหมด (ล้างวันลา+ตาราง)", type="secondary"):
+    if st.button("🔄 รีเซ็ตทั้งหมด (ล้างวันลา+ตาราง+Fix+กำลังคน)", type="secondary"):
         st.session_state.requests = []
+        st.session_state.fix_requests = []
+        st.session_state.staffing_overrides = []
         st.session_state.schedule_df = None
+        save_requests_to_csv()
+        save_fix_requests_to_csv()
+        save_staffing_overrides_to_csv()
         st.rerun()
 
     st.markdown("---")
     if st.button("🚀 ประมวลผลจัดตาราง", type="primary"):
         with st.spinner("กำลังคำนวณและเกลี่ยเวร..."):
-            df = solve_schedule(year, month, days_in_month, nurses_list, st.session_state.requests, er5_er10_pattern)
+            df = solve_schedule(
+                year, month, days_in_month, nurses_list, 
+                st.session_state.requests, er5_er10_pattern,
+                st.session_state.fix_requests, st.session_state.staffing_overrides
+            )
             if df is not None:
                 st.session_state.schedule_df = df
                 st.success("จัดตารางสำเร็จ!")
