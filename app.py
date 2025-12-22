@@ -559,19 +559,42 @@ with st.sidebar:
     with st.form("fix_form", clear_on_submit=True):
         f_nurse = st.selectbox("ชื่อพยาบาล", nurses_list, key="fix_nurse")
         f_shift = st.radio("ประเภทเวร", ["เช้า (M)", "บ่าย (S)", "ดึก (N)"], horizontal=True)
-        f_dates = st.multiselect("เลือกวันที่", range(1, days_in_month + 1), key="fix_dates")
         
-        if st.form_submit_button("เพิ่มรายการ") and f_dates:
+        # เลือกแบบระบุ "วัน" หรือ "วันที่"
+        f_mode = st.radio("ระบุแบบ", ["📅 วันที่ (เลือกวันที่เฉพาะ)", "📆 วัน (ทุกวันจันทร์, อังคาร, ฯลฯ)"], horizontal=True)
+        
+        if "วันที่" in f_mode:
+            # แบบเดิม: เลือกวันที่เฉพาะ
+            f_dates = st.multiselect("เลือกวันที่", range(1, days_in_month + 1), key="fix_dates")
+            selected_dates = f_dates
+        else:
+            # แบบใหม่: เลือกวัน (จันทร์-อาทิตย์)
+            day_options = ["จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์", "อาทิตย์"]
+            f_days = st.multiselect("เลือกวัน", day_options, key="fix_days")
+            
+            # แปลงวันเป็นวันที่ในเดือนนี้
+            day_map = {"จันทร์": 0, "อังคาร": 1, "พุธ": 2, "พฤหัสบดี": 3, "ศุกร์": 4, "เสาร์": 5, "อาทิตย์": 6}
+            selected_dates = []
+            for d in range(1, days_in_month + 1):
+                wd = calendar.weekday(year, month, d)
+                for day_name in f_days:
+                    if wd == day_map[day_name]:
+                        selected_dates.append(d)
+            
+            if f_days:
+                st.caption(f"📅 วันที่ที่ตรงกัน: {', '.join(map(str, selected_dates))}")
+        
+        if st.form_submit_button("เพิ่มรายการ") and selected_dates:
             shift_code = {'เช้า (M)': 'M', 'บ่าย (S)': 'S', 'ดึก (N)': 'N'}[f_shift]
             st.session_state.fix_requests.append({
                 'nurse': f_nurse,
                 'shift': shift_code,
-                'dates': f_dates,
+                'dates': selected_dates,
                 'month': month,
                 'year': year
             })
             save_fix_requests_to_csv()
-            st.success(f"เพิ่มคำขอ Fix เวร {f_shift} สำหรับ {f_nurse} แล้ว!")
+            st.success(f"เพิ่มคำขอ Fix เวร {f_shift} สำหรับ {f_nurse} วันที่ {', '.join(map(str, selected_dates))} แล้ว!")
     
     if st.session_state.fix_requests:
         # แสดงรายการ fix requests
