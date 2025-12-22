@@ -51,6 +51,20 @@ def get_holiday_name(year, month, day):
     }
     return holiday_names.get((year, month, day), "วันหยุดราชการ")
 
+# --- Nurse Names Mapping (กันลืม) ---
+NURSE_NAMES = {
+    'ER1': 'บูรีซาน',
+    'ER2': 'อัมรี',
+    'ER3': 'ฮาบีบูเลาะ',
+    'ER4': 'มัรวาน',
+    'ER5': 'อานูรา',
+    'ER6': 'อูไมซะห์',
+    'ER7': 'บูรีฮัน',
+    'ER8': 'สูสนี',
+    'ER9': 'นูซีลัน',
+    'ER10': 'ซัมนะห์',
+}
+
 CSV_FILE = "leave_requests.csv"
 
 def load_requests_from_csv():
@@ -73,7 +87,7 @@ def get_week_occurrence(day):
     return (day - 1) // 7 + 1
 
 # --- 1. ฟังก์ชันจัดตาราง (Scheduler Engine) ---
-def solve_schedule(year, month, days_in_month, nurses, requests):
+def solve_schedule(year, month, days_in_month, nurses, requests, er5_er10_pattern='new'):
     model = cp_model.CpModel()
     
     # เพิ่ม NS (บ่าย+ดึก 16 ชม.) เป็น OT shift
@@ -194,16 +208,31 @@ def solve_schedule(year, month, days_in_month, nurses, requests):
         elif wd == 4:  # ศุกร์ = M
             model.Add(shifts_var[('ER1', d, 'M')] == 1)
 
-        # ER3 (Soft Fix): วันจันทร์ทุกสัปดาห์ (เท่าที่ได้ ไม่เบียดเบียนผู้อื่น)
-        if wd == 0:  # วันจันทร์ = 0
+        # ER3 (Soft Fix): วันพุธ พฤหัส ทุกสัปดาห์ (เท่าที่ได้ ไม่เบียดเบียนผู้อื่น)
+        if wd in [2, 3]:  # วันพุธ = 2, วันพฤหัส = 3
             preferred_constraints.append(shifts_var[('ER3', d, 'M')])
 
-        # ER5 (Soft Fix): วันจันทร์ สัปดาห์ 1,4 & ศุกร์ สัปดาห์ 1 (เปลี่ยนจากอังคารเป็นจันทร์)
-        if (wd == 0 and week_occurrence in [1, 4]) or (wd == 4 and week_occurrence == 1):
-            preferred_constraints.append(shifts_var[('ER5', d, 'M')])
+        # ER5 & ER10 (Soft Fix): ขึ้นกับ pattern ที่เลือก
+        if er5_er10_pattern == 'old':  # Pattern เก่า (ก.ย. 2025)
+            # ER5: อังคาร สัปดาห์ 1,4
+            if wd == 1 and week_occurrence in [1, 4]:
+                preferred_constraints.append(shifts_var[('ER5', d, 'M')])
+            # ER10: อังคาร สัปดาห์ 2,3
+            if wd == 1 and week_occurrence in [2, 3]:
+                preferred_constraints.append(shifts_var[('ER10', d, 'M')])
+        else:  # Pattern ใหม่ (default)
+            # ER5: ทุกวันจันทร์
+            if wd == 0:
+                preferred_constraints.append(shifts_var[('ER5', d, 'M')])
+            # ER10: ทุกวันศุกร์
+            if wd == 4:
+                preferred_constraints.append(shifts_var[('ER10', d, 'M')])
 
-        # ER9 (Soft Fix): อังคาร สัปดาห์ 2,3
+        # ER9 (Soft Fix): อังคาร สัปดาห์ 2,3 + สัปดาห์สุดท้าย 1 วัน (วันธรรมดาใดก็ได้)
         if wd == 1 and week_occurrence in [2, 3]:
+            preferred_constraints.append(shifts_var[('ER9', d, 'M')])
+        # สัปดาห์สุดท้าย = วันที่เหลือน้อยกว่า 7 วันจนสิ้นเดือน (วันธรรมดา จ-ศ)
+        if d > days_in_month - 7 and wd < 5:  # วันธรรมดาในสัปดาห์สุดท้าย
             preferred_constraints.append(shifts_var[('ER9', d, 'M')])
 
         er7_m_shifts.append(shifts_var[('ER7', d, 'M')])
@@ -281,6 +310,24 @@ def solve_schedule(year, month, days_in_month, nurses, requests):
         model.Add(off_days <= target_off_days + 2)
     
     # ==========================================
+    # 3.2 เกลี่ยวันหยุดพิเศษ (ส-อา + นักขัตฤกษ์) ให้ทุกคนได้หมุนเวียนเท่ากัน
+    # ==========================================
+    # สร้าง list วันพิเศษ (ส-อา + นักขัตฤกษ์)
+    special_days = [d for d in range(1, days_in_month + 1) 
+                    if calendar.weekday(year, month, d) >= 5 or is_holiday(year, month, d)]
+    
+    # นับ special day offs ของแต่ละคน (เฉพาะ 'O' เท่านั้น ไม่นับ L_T)
+    special_offs_per_nurse = {}
+    for n in rotating_nurses:
+        special_offs_per_nurse[n] = sum(shifts_var[(n, d, 'O')] for d in special_days)
+    
+    # เกลี่ยให้ต่างกันไม่เกิน 2 วัน
+    for n1 in rotating_nurses:
+        for n2 in rotating_nurses:
+            if n1 != n2:
+                model.Add(special_offs_per_nurse[n1] - special_offs_per_nurse[n2] <= 2)
+    
+    # ==========================================
     # 4. เกลี่ยเวรบ่าย (S) และดึก (N) แยกกัน ต่างกันไม่เกิน 1
     # ==========================================
     s_shifts_per_nurse = {}
@@ -323,12 +370,30 @@ def solve_schedule(year, month, days_in_month, nurses, requests):
             # ให้คะแนนเมื่อมี O-O ติดกัน
             consecutive_off_constraints.append(shifts_var[(n, d, 'O')] + shifts_var[(n, d + 1, 'O')])
     
+    # ==========================================
+    # 7. Soft Constraint: Separation - หลีกเลี่ยงคู่พยาบาลขึ้นเวรเดียวกัน
+    # ==========================================
+    separation_pairs = [('ER2', 'ER7')]  # คู่ที่ต้องการแยก
+    separation_penalty = []
+    
+    for (n1, n2) in separation_pairs:
+        if n1 in nurses and n2 in nurses:
+            for d in range(1, days_in_month + 1):
+                for shift in ['S', 'M', 'N']:  # เวรบ่าย, เช้า, ดึก
+                    # สร้างตัวแปรสำหรับเช็คว่าซ้อนกันหรือไม่
+                    same_shift = model.NewBoolVar(f'same_{n1}_{n2}_{d}_{shift}')
+                    # ถ้าทั้งคู่ทำเวรเดียวกัน same_shift = 1
+                    model.Add(shifts_var[(n1, d, shift)] + shifts_var[(n2, d, shift)] <= 1 + same_shift)
+                    model.Add(shifts_var[(n1, d, shift)] + shifts_var[(n2, d, shift)] >= 2 * same_shift)
+                    separation_penalty.append(same_shift)
+    
     # รวม soft constraints ทั้งหมดเข้าด้วยกัน
-    # น้ำหนัก: preferred_constraints (M fix) > consecutive_off > off_after_night
+    # น้ำหนัก: preferred_constraints (M fix) > separation > consecutive_off > off_after_night
     model.Maximize(
         sum(preferred_constraints) * 100 + 
         sum(consecutive_off_constraints) * 5 +
-        sum(off_after_night_constraints)
+        sum(off_after_night_constraints) -
+        sum(separation_penalty) * 30  # ลบคะแนนเมื่อ ER2-ER7 ซ้อนเวรกัน
     )
 
     # Solve
@@ -339,7 +404,9 @@ def solve_schedule(year, month, days_in_month, nurses, requests):
     if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
         schedule_data = []
         for n in nurses:
-            row = {'Nurse': n}
+            # แสดง ID + ชื่อจริง
+            display_name = f"{n} ({NURSE_NAMES.get(n, '')})"
+            row = {'Nurse': display_name}
             for d in range(1, days_in_month + 1):
                 for s in shifts:
                     if solver.Value(shifts_var[(n, d, s)]):
@@ -357,9 +424,9 @@ def solve_schedule(year, month, days_in_month, nurses, requests):
         return None
 
 # --- UI Setup ---
-st.set_page_config(page_title="ระบบจัดตารางเวร ER_KPH v2.1", layout="wide")
+st.set_page_config(page_title="ระบบจัดตารางเวร ER_KPH v2.2", layout="wide")
 st.title("🏥 ระบบจัดตารางเวรพยาบาล (ER_KPH)")
-st.caption("**v2.1** | NS=บ่าย+ดึก(OT) | วันหยุดนักขัตฤกษ์ 🟡 | เกลี่ยเวร S/N | ดึกเดี่ยว")
+st.caption("**v2.2** | 🆕 เกลี่ย ส-อา/นักขัตฤกษ์ | Separation ER2-ER7 | Pattern ER5/ER10 เลือกได้")
 
 # Session State
 if 'schedule_df' not in st.session_state: st.session_state.schedule_df = None
@@ -373,6 +440,16 @@ with st.sidebar:
     month = st.selectbox("เดือน", range(1, 13), 10)
     _, days_in_month = calendar.monthrange(year, month)
     nurses_list = [f'ER{i}' for i in range(1, 11)]
+    
+    st.markdown("---")
+    st.header("📅 Pattern เวรเช้า ER5/ER10")
+    er5_er10_pattern = st.radio(
+        "เลือก Pattern:",
+        options=['new', 'old'],
+        format_func=lambda x: "🆕 ใหม่: ER5=จันทร์ทุกสัปดาห์, ER10=ศุกร์ทุกสัปดาห์" if x == 'new' else "📆 เก่า (ก.ย.25): ER5=อังคาร wk1,4, ER10=อังคาร wk2,3",
+        index=0,
+        help="เลือก pattern เวรเช้า Fix ของ ER5 และ ER10"
+    )
     
     st.markdown("---")
     st.header("📝 บันทึกวันลา")
@@ -417,7 +494,7 @@ with st.sidebar:
     st.markdown("---")
     if st.button("🚀 ประมวลผลจัดตาราง", type="primary"):
         with st.spinner("กำลังคำนวณและเกลี่ยเวร..."):
-            df = solve_schedule(year, month, days_in_month, nurses_list, st.session_state.requests)
+            df = solve_schedule(year, month, days_in_month, nurses_list, st.session_state.requests, er5_er10_pattern)
             if df is not None:
                 st.session_state.schedule_df = df
                 st.success("จัดตารางสำเร็จ!")
