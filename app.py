@@ -561,40 +561,51 @@ with st.sidebar:
         f_shift = st.radio("ประเภทเวร", ["เช้า (M)", "บ่าย (S)", "ดึก (N)"], horizontal=True)
         
         # เลือกแบบระบุ "วัน" หรือ "วันที่"
-        f_mode = st.radio("ระบุแบบ", ["📅 วันที่ (เลือกวันที่เฉพาะ)", "📆 วัน (ทุกวันจันทร์, อังคาร, ฯลฯ)"], horizontal=True)
+        f_mode = st.radio("ระบุแบบ", ["📅 วันที่", "📆 วัน (จันทร์-อาทิตย์)"], horizontal=True)
         
-        if "วันที่" in f_mode:
-            # แบบเดิม: เลือกวันที่เฉพาะ
-            f_dates = st.multiselect("เลือกวันที่", range(1, days_in_month + 1), key="fix_dates")
-            selected_dates = f_dates
-        else:
-            # แบบใหม่: เลือกวัน (จันทร์-อาทิตย์)
+        # แสดงทั้ง 2 ตัวเลือก แต่ใช้ตาม mode
+        col1, col2 = st.columns(2)
+        with col1:
+            f_dates = st.multiselect("เลือกวันที่", range(1, days_in_month + 1), key="fix_dates",
+                                      help="ใช้เมื่อเลือก '📅 วันที่'")
+        with col2:
             day_options = ["จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์", "อาทิตย์"]
-            f_days = st.multiselect("เลือกวัน", day_options, key="fix_days")
-            
-            # แปลงวันเป็นวันที่ในเดือนนี้
-            day_map = {"จันทร์": 0, "อังคาร": 1, "พุธ": 2, "พฤหัสบดี": 3, "ศุกร์": 4, "เสาร์": 5, "อาทิตย์": 6}
-            selected_dates = []
-            for d in range(1, days_in_month + 1):
-                wd = calendar.weekday(year, month, d)
-                for day_name in f_days:
-                    if wd == day_map[day_name]:
-                        selected_dates.append(d)
-            
-            if f_days:
-                st.caption(f"📅 วันที่ที่ตรงกัน: {', '.join(map(str, selected_dates))}")
+            f_days = st.multiselect("เลือกวัน", day_options, key="fix_days",
+                                     help="ใช้เมื่อเลือก '📆 วัน'")
         
-        if st.form_submit_button("เพิ่มรายการ") and selected_dates:
-            shift_code = {'เช้า (M)': 'M', 'บ่าย (S)': 'S', 'ดึก (N)': 'N'}[f_shift]
-            st.session_state.fix_requests.append({
-                'nurse': f_nurse,
-                'shift': shift_code,
-                'dates': selected_dates,
-                'month': month,
-                'year': year
-            })
-            save_fix_requests_to_csv()
-            st.success(f"เพิ่มคำขอ Fix เวร {f_shift} สำหรับ {f_nurse} วันที่ {', '.join(map(str, selected_dates))} แล้ว!")
+        # แปลงวันเป็นวันที่
+        day_map = {"จันทร์": 0, "อังคาร": 1, "พุธ": 2, "พฤหัสบดี": 3, "ศุกร์": 4, "เสาร์": 5, "อาทิตย์": 6}
+        dates_from_days = []
+        for d in range(1, days_in_month + 1):
+            wd = calendar.weekday(year, month, d)
+            for day_name in f_days:
+                if wd == day_map[day_name]:
+                    dates_from_days.append(d)
+        
+        # เลือกใช้ตาม mode
+        if "วันที่" in f_mode:
+            selected_dates = f_dates
+            if f_dates:
+                st.info(f"📅 เลือกวันที่: {', '.join(map(str, f_dates))}")
+        else:
+            selected_dates = dates_from_days
+            if f_days:
+                st.info(f"📆 วัน {', '.join(f_days)} → วันที่: {', '.join(map(str, dates_from_days))}")
+        
+        if st.form_submit_button("เพิ่มรายการ"):
+            if selected_dates:
+                shift_code = {'เช้า (M)': 'M', 'บ่าย (S)': 'S', 'ดึก (N)': 'N'}[f_shift]
+                st.session_state.fix_requests.append({
+                    'nurse': f_nurse,
+                    'shift': shift_code,
+                    'dates': selected_dates,
+                    'month': month,
+                    'year': year
+                })
+                save_fix_requests_to_csv()
+                st.success(f"✅ เพิ่มคำขอ Fix เวร {f_shift} สำหรับ {f_nurse} วันที่ {', '.join(map(str, selected_dates))} แล้ว!")
+            else:
+                st.warning("⚠️ กรุณาเลือกวันที่หรือวันก่อน")
     
     if st.session_state.fix_requests:
         # แสดงรายการ fix requests
