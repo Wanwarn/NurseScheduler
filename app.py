@@ -51,18 +51,18 @@ def get_holiday_name(year, month, day):
     }
     return holiday_names.get((year, month, day), "วันหยุดราชการ")
 
-# --- Nurse Names Mapping (กันลืม) ---
+# --- Nurse Names Mapping (Anonymized for Public Sharing) ---
 NURSE_NAMES = {
-    'ER1': 'บูรีซาน',
-    'ER2': 'อัมรี',
-    'ER3': 'ฮาบีบูเลาะ',
-    'ER4': 'มัรวาน',
-    'ER5': 'อานูรา',
-    'ER6': 'อูไมซะห์',
-    'ER7': 'บูรีฮัน',
-    'ER8': 'สูสนี',
-    'ER9': 'นูซีลัน',
-    'ER10': 'ซัมนะห์',
+    'ER1': 'Nurse 1',
+    'ER2': 'Nurse 2',
+    'ER3': 'Nurse 3',
+    'ER4': 'Nurse 4',
+    'ER5': 'Nurse 5',
+    'ER6': 'Nurse 6',
+    'ER7': 'Nurse 7',
+    'ER8': 'Nurse 8',
+    'ER9': 'Nurse 9',
+    'ER10': 'Nurse 10',
 }
 
 CSV_FILE = "leave_requests.csv"
@@ -119,8 +119,167 @@ def save_staffing_overrides_to_csv():
 def get_week_occurrence(day):
     return (day - 1) // 7 + 1
 
+def diagnose_scheduling_issues(year, month, days_in_month, nurses, requests, staffing_overrides, enable_oc):
+    """วิเคราะห์ปัญหาที่อาจทำให้จัดตารางไม่ได้"""
+    issues = []
+    
+    # นับจำนวนคนที่ลาแต่ละวัน
+    off_per_day = {d: [] for d in range(1, days_in_month + 1)}
+    leave_per_day = {d: [] for d in range(1, days_in_month + 1)}
+    
+    for req in requests:
+        if req.get('month') == month and req.get('year') == year:
+            if req.get('nurse') in nurses:
+                d = req.get('date')
+                if 1 <= d <= days_in_month:
+                    if req.get('type') == 'Off':
+                        off_per_day[d].append(req['nurse'])
+                    elif req.get('type') == 'Leave_Train':
+                        leave_per_day[d].append(req['nurse'])
+    
+    # ตรวจสอบแต่ละวัน
+    for d in range(1, days_in_month + 1):
+        weekday = calendar.weekday(year, month, d)
+        is_special_day = weekday >= 5 or is_holiday(year, month, d)
+        
+        # จำนวนคนที่ว่าง (ไม่ได้ลา Off หรือ L_T)
+        unavailable = set(off_per_day[d]) | set(leave_per_day[d])
+        available = [n for n in nurses if n not in unavailable]
+        available_count = len(available)
+        
+        # ความต้องการขั้นต่ำ
+        req_m = 4 if is_special_day else 3  # เวรเช้า
+        req_s = 2  # เวรบ่าย  
+        req_n = 1  # เวรดึก
+        
+        # ตรวจสอบ Override
+        for override in staffing_overrides:
+            if override.get('month') == month and override.get('year') == year:
+                if override.get('start', 1) <= d <= override.get('end', days_in_month):
+                    if override.get('shift') == 'N':
+                        req_n = override.get('count', 1)
+                    elif override.get('shift') == 'S':
+                        req_s = override.get('count', 2)
+        
+        # OC ต้องการอีก 1 คน (ถ้าเปิดใช้งาน และเป็นวันที่ 1-10)
+        req_oc = 1 if enable_oc and d <= 10 else 0
+        
+        # ต้องการอย่างน้อย M + S + N + OC (แม้จะซ้อนได้บางส่วน แต่ใช้ประมาณการ)
+        min_needed = req_m + req_s + req_n + req_oc
+        
+        # ER1 Fix: ศุกร์ M, อื่นๆ Off
+        er1_available_for_m = 1 if 'ER1' in available and weekday == 4 else 0
+        
+        # คนที่ลา/ประชุม นับเป็น M ได้
+        leave_count = len(leave_per_day[d])
+        
+        # จำนวนคนที่ต้องการทำเวรจริง (หลังหักคนลา)
+        need_for_m = max(0, req_m - leave_count - er1_available_for_m)
+        need_for_sn = req_s + req_n
+        
+        # คนที่ว่างหลังหัก ER1 (ER1 ทำได้แค่ M ศุกร์)
+        workers = [n for n in available if n != 'ER1']
+        
+        if len(off_per_day[d]) > 0 and available_count < need_for_m + need_for_sn:
+            day_type = "ส-อา/นักขัตฤกษ์" if is_special_day else "วันธรรมดา"
+            issues.append({
+                'day': d,
+                'weekday': ['จ','อ','พ','พฤ','ศ','ส','อา'][weekday],
+                'type': day_type,
+                'off_nurses': off_per_day[d],
+                'leave_nurses': leave_per_day[d],
+                'available': available_count,
+                'needed_m': req_m,
+                'needed_s': req_s,
+                'needed_n': req_n,
+                'needed_oc': req_oc
+            })
+    
+    return issues
+
+def parse_previous_month_schedule(uploaded_file, nurses):
+    """อ่านไฟล์ตารางเดือนก่อนและดึงข้อมูล 7 วันสุดท้าย"""
+    if uploaded_file is None:
+        return None
+    
+    try:
+        df = pd.read_csv(uploaded_file)
+        
+        # หา column ที่เป็นตัวเลข (วันที่)
+        date_cols = [col for col in df.columns if col.isdigit() or any(c.isdigit() for c in str(col))]
+        
+        if not date_cols:
+            return None
+        
+        # เรียงลำดับและเอา 7 วันสุดท้าย
+        # ลบ emoji ออกก่อนเรียง
+        def extract_day(col):
+            return int(''.join(filter(str.isdigit, str(col))))
+        
+        date_cols_sorted = sorted(date_cols, key=extract_day)
+        last_7_days = date_cols_sorted[-7:] if len(date_cols_sorted) >= 7 else date_cols_sorted
+        
+        # สร้าง dict: nurse -> list of shifts (7 วันสุดท้าย)
+        prev_data = {}
+        for _, row in df.iterrows():
+            nurse_col = str(row.iloc[0])  # Column แรกคือชื่อพยาบาล
+            
+            # Extract nurse ID - รองรับหลายรูปแบบ
+            nurse_id = None
+            
+            # รูปแบบ 1: "ER1", "ER2", ... "ER10"
+            for n in nurses:
+                if n in nurse_col:
+                    nurse_id = n
+                    break
+            
+            # รูปแบบ 2: "Nurse 1", "Nurse 2", ... "Nurse 10"
+            if nurse_id is None:
+                import re
+                match = re.search(r'Nurse\s*(\d+)', nurse_col)
+                if match:
+                    num = int(match.group(1))
+                    nurse_id = f'ER{num}'
+            
+            if nurse_id and nurse_id in nurses:
+                shifts = []
+                for col in last_7_days:
+                    shift = str(row[col]) if col in row.index else ''
+                    # แปลงกลับเป็น code (รองรับทั้งภาษาอังกฤษและภาษาไทย)
+                    shift = shift.strip()
+                    
+                    # Thai abbreviations mapping
+                    if shift == 'บ':  # บ่าย
+                        shift = 'S'
+                    elif shift == 'ช':  # เช้า
+                        shift = 'M'
+                    elif shift == 'ค':  # ดึก
+                        shift = 'N'
+                    elif shift == 'ดบ':  # ดึก+บ่าย (NS)
+                        shift = 'NS'
+                    elif shift in ['o', 'O', '']:  # Off
+                        shift = 'O'
+                    elif shift in ['VA', 'ประชุม']:  # ลา/ประชุม
+                        shift = 'L_T'
+                    elif shift in ['ncd', 'NCD']:
+                        shift = 'O'
+                    elif 'ลา' in shift or 'อบรม' in shift or 'ประชุม' in shift:
+                        shift = 'L_T'
+                    elif 'OC' in shift or '📞' in shift:
+                        shift = 'OC'
+                    elif shift in ['M', 'S', 'N', 'NS']:
+                        pass  # ใช้ค่าเดิม
+                    else:
+                        shift = 'O'  # default
+                    
+                    prev_data[nurse_id] = prev_data.get(nurse_id, []) + [shift]
+        
+        return prev_data
+    except Exception as e:
+        return None
+
 # --- 1. ฟังก์ชันจัดตาราง (Scheduler Engine) ---
-def solve_schedule(year, month, days_in_month, nurses, requests, er5_er10_pattern='new', fix_requests=None, staffing_overrides=None):
+def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=None, staffing_overrides=None, enable_oc=True, prev_month_data=None):
     if fix_requests is None:
         fix_requests = []
     if staffing_overrides is None:
@@ -128,15 +287,69 @@ def solve_schedule(year, month, days_in_month, nurses, requests, er5_er10_patter
     
     model = cp_model.CpModel()
     
-    # เพิ่ม NS (บ่าย+ดึก 16 ชม.) เป็น OT shift
-    shifts = ['S', 'M', 'N', 'O', 'L_T', 'NS'] 
-    work_shifts = ['S', 'M', 'N', 'L_T', 'NS']  # NS นับเป็นวันทำงาน
+    # เพิ่ม NS (บ่าย+ดึก 16 ชม.) เป็น OT shift, OC = On-Call Standby
+    shifts = ['S', 'M', 'N', 'O', 'L_T', 'NS', 'OC'] 
+    work_shifts = ['S', 'M', 'N', 'L_T', 'NS']  # NS นับเป็นวันทำงาน (OC ไม่นับ)
+    
+    # กลุ่มพยาบาลสำหรับเวร OC (On-Call วันที่ 1-10)
+    oc_hard_ban = ['ER1', 'ER7']      # Hard: ห้ามเด็ดขาด
+    oc_soft_avoid = ['ER4', 'ER8']    # Soft: ขอเลี่ยง (จัดให้คนอื่นก่อน)
+    oc_normal_pool = [n for n in nurses if n not in oc_hard_ban + oc_soft_avoid]
 
     shifts_var = {}
     for n in nurses:
         for d in range(1, days_in_month + 1):
             for s in shifts:
                 shifts_var[(n, d, s)] = model.NewBoolVar(f'shift_{n}_{d}_{s}')
+
+    # ==========================================
+    # 0. Cross-Month Constraints (ข้อมูลจากเดือนก่อน)
+    # ==========================================
+    if prev_month_data:
+        for n in nurses:
+            if n in prev_month_data and len(prev_month_data[n]) >= 1:
+                last_shift = prev_month_data[n][-1]  # เวรวันสุดท้ายของเดือนก่อน
+                
+                # ห้าม N/NS → M ข้ามเดือน (ทำดึกเดือนก่อน → ห้ามเช้าวันที่ 1)
+                if last_shift in ['N', 'NS']:
+                    model.Add(shifts_var[(n, 1, 'M')] == 0)
+                
+                # ห้าม S → N/NS ข้ามเดือน (ทำบ่ายเดือนก่อน → ห้ามดึกวันที่ 1)
+                if last_shift == 'S':
+                    model.Add(shifts_var[(n, 1, 'N')] == 0)
+                    model.Add(shifts_var[(n, 1, 'NS')] == 0)
+                
+                # ห้าม Off → N/NS ข้ามเดือน
+                if last_shift == 'O':
+                    model.Add(shifts_var[(n, 1, 'N')] == 0)
+                    model.Add(shifts_var[(n, 1, 'NS')] == 0)
+                    model.Add(shifts_var[(n, 1, 'OC')] == 0)
+            
+            # นับวันทำงานต่อเนื่องข้ามเดือน (กฎ 7 วันใน 8 วัน)
+            if n in prev_month_data and len(prev_month_data[n]) >= 7:
+                # นับจำนวนวันทำงานติดกันจากท้ายเดือนก่อน
+                consecutive_work = 0
+                for s in reversed(prev_month_data[n]):
+                    if s in ['S', 'M', 'N', 'L_T', 'NS']:
+                        consecutive_work += 1
+                    else:
+                        break  # หยุดนับเมื่อเจอวันหยุด
+                
+                # ถ้าทำงานติดกัน X วันท้ายเดือนก่อน → วันแรกๆ ของเดือนใหม่ต้องหยุด
+                if consecutive_work >= 7:
+                    # ทำงาน 7 วันติด → วันที่ 1 ต้องหยุด (Hard)
+                    for work_s in ['S', 'M', 'N', 'NS']:
+                        model.Add(shifts_var[(n, 1, work_s)] == 0)
+                elif consecutive_work >= 6:
+                    # ทำงาน 6 วันติด → วันที่ 1-2 ต้องมีหยุดอย่างน้อย 1 วัน
+                    model.Add(
+                        shifts_var[(n, 1, 'O')] + shifts_var[(n, 2, 'O')] >= 1
+                    )
+                elif consecutive_work >= 5:
+                    # ทำงาน 5 วันติด → วันที่ 1-3 ต้องมีหยุดอย่างน้อย 1 วัน  
+                    model.Add(
+                        shifts_var[(n, 1, 'O')] + shifts_var[(n, 2, 'O')] + shifts_var[(n, 3, 'O')] >= 1
+                    )
 
     # ==========================================
     # 1. กฎพื้นฐานและกำลังคน (Hard Constraints)
@@ -173,11 +386,22 @@ def solve_schedule(year, month, days_in_month, nurses, requests, er5_er10_patter
         req_m = 4 if is_special_day else 3  # เสาร์-อาทิตย์ หรือ วันหยุดนักขัตฤกษ์ = 4 คน
         model.Add(sum(shifts_var[(n, d, 'M')] for n in nurses) == req_m)
 
-    # กฎการสลับเวร (ห้าม S -> N, รวม NS ด้วย)
+    # กฎการสลับเวร
     for n in nurses:
         for d in range(1, days_in_month):
+            # ห้าม S -> N (บ่ายตามด้วยดึก)
             model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'N')] <= 1)
             model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'NS')] <= 1)
+            # ห้าม N -> S (ดึกตามด้วยบ่าย)
+            model.Add(shifts_var[(n, d, 'N')] + shifts_var[(n, d + 1, 'S')] <= 1)
+            model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 1, 'S')] <= 1)
+    
+    # ห้าม S -> M -> N (บ่าย -> เช้า -> ดึก ใน 3 วันติด)
+    for n in nurses:
+        for d in range(1, days_in_month - 1):
+            # ถ้า S วันที่ d และ M วันที่ d+1 → ห้าม N วันที่ d+2
+            model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'M')] + shifts_var[(n, d + 2, 'N')] <= 2)
+            model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'M')] + shifts_var[(n, d + 2, 'NS')] <= 2)
 
     # ==========================================
     # กฎเวรดึก (N) เดี่ยว - ต้องทำงานก่อนดึก และหยุดหลังดึก
@@ -225,10 +449,32 @@ def solve_schedule(year, month, days_in_month, nurses, requests, er5_er10_patter
         model.Add(shifts_var[('ER1', d, 'NS')] == 0)
         model.Add(shifts_var[('ER7', d, 'NS')] == 0)
 
-    # ทำงานต่อเนื่องสูงสุด 7 วัน (รวม NS)
+    # ทำงานต่อเนื่องสูงสุด 7 วัน ใน 8 วัน (รวม NS + ข้ามเดือน)
     for n in nurses:
+        # กรณีปกติ: ใช้เฉพาะข้อมูลเดือนนี้
         for d in range(1, days_in_month - 6):
             model.Add(sum(sum(shifts_var[(n, d + k, s)] for s in work_shifts) for k in range(8)) <= 7)
+        
+        # กรณีข้ามเดือน: วันที่ 1-7 ต้องรวมข้อมูลจากเดือนก่อน
+        if prev_month_data and n in prev_month_data:
+            prev_shifts = prev_month_data[n]  # 7 วันสุดท้ายของเดือนก่อน
+            
+            for d in range(1, min(8, days_in_month + 1)):
+                days_from_prev = max(0, 8 - d)  # จำนวนวันที่ต้องดูจากเดือนก่อน
+                
+                if days_from_prev > 0 and days_from_prev <= len(prev_shifts):
+                    # นับวันทำงานจากเดือนก่อน
+                    prev_work_count = sum(
+                        1 for s in prev_shifts[-days_from_prev:] 
+                        if s in ['S', 'M', 'N', 'L_T', 'NS']
+                    )
+                    
+                    # จำกัดวันทำงานเดือนนี้ให้ไม่เกิน 7 - prev_work_count
+                    max_curr_work = max(0, 7 - prev_work_count)
+                    model.Add(
+                        sum(sum(shifts_var[(n, k, s)] for s in work_shifts) 
+                            for k in range(1, d + 1)) <= max_curr_work
+                    )
     
     # ป้องกัน NS หลังทำงานติด 6 วัน (เพราะ NS = 2 เวร จะทำให้เกิน 7 เวร)
     for n in nurses_for_ns:
@@ -238,6 +484,46 @@ def solve_schedule(year, month, days_in_month, nurses, requests, er5_er10_patter
             prev_work = sum(sum(shifts_var[(n, d - k, s)] for s in ['S', 'M', 'N', 'NS']) for k in range(1, 7))
             # ถ้าทำงาน 6 วันก่อนหน้า (prev_work=6) แล้ว NS ห้าม
             model.Add(prev_work + shifts_var[(n, d, 'NS')] <= 6)
+
+    # ==========================================
+    # กฎเวร OC (On-Call Standby) - เฉพาะวันที่ 1-10
+    # ==========================================
+    oc_avoid_penalty = []  # สำหรับ Soft Constraint ER4, ER8
+    
+    if enable_oc:
+        # วันที่ 1-10 ต้องมี OC อย่างน้อย 1 คน
+        for d in range(1, min(11, days_in_month + 1)):
+            model.Add(sum(shifts_var[(n, d, 'OC')] for n in nurses) >= 1)
+        
+        # วันที่ 11+ ห้ามมี OC
+        for d in range(11, days_in_month + 1):
+            for n in nurses:
+                model.Add(shifts_var[(n, d, 'OC')] == 0)
+        
+        # ER1, ER7 ห้ามทำ OC เด็ดขาด (Hard Constraint)
+        for d in range(1, days_in_month + 1):
+            for n in oc_hard_ban:
+                model.Add(shifts_var[(n, d, 'OC')] == 0)
+        
+        # กฎ OC คล้ายเวรดึก
+        for n in nurses:
+            for d in range(1, min(10, days_in_month)):
+                # ห้าม OC ติดกัน (OC-OC)
+                model.Add(shifts_var[(n, d, 'OC')] + shifts_var[(n, d + 1, 'OC')] <= 1)
+                # ห้าม OC แล้วเช้า (OC-M)
+                model.Add(shifts_var[(n, d, 'OC')] + shifts_var[(n, d + 1, 'M')] <= 1)
+                # ห้าม Off แล้ว OC (O-OC)
+                model.Add(shifts_var[(n, d, 'O')] + shifts_var[(n, d + 1, 'OC')] <= 1)
+        
+        # ER4, ER8 ขอเลี่ยง (Soft Constraint - ลด penalty ใน objective)
+        for d in range(1, min(11, days_in_month + 1)):
+            for n in oc_soft_avoid:
+                oc_avoid_penalty.append(shifts_var[(n, d, 'OC')])
+    else:
+        # ถ้าปิด OC → ห้ามทุกคนทำ OC
+        for d in range(1, days_in_month + 1):
+            for n in nurses:
+                model.Add(shifts_var[(n, d, 'OC')] == 0)
 
     # ==========================================
     # 2. เงื่อนไขรายบุคคล (Preferences & Fix)
@@ -263,21 +549,7 @@ def solve_schedule(year, month, days_in_month, nurses, requests, er5_er10_patter
         if wd in [2, 3]:  # วันพุธ = 2, วันพฤหัส = 3
             preferred_constraints.append(shifts_var[('ER3', d, 'M')])
 
-        # ER5 & ER10 (Soft Fix): ขึ้นกับ pattern ที่เลือก
-        if er5_er10_pattern == 'old':  # Pattern เก่า (ก.ย. 2025)
-            # ER5: อังคาร สัปดาห์ 1,4
-            if wd == 1 and week_occurrence in [1, 4]:
-                preferred_constraints.append(shifts_var[('ER5', d, 'M')])
-            # ER10: อังคาร สัปดาห์ 2,3
-            if wd == 1 and week_occurrence in [2, 3]:
-                preferred_constraints.append(shifts_var[('ER10', d, 'M')])
-        else:  # Pattern ใหม่ (default)
-            # ER5: ทุกวันจันทร์
-            if wd == 0:
-                preferred_constraints.append(shifts_var[('ER5', d, 'M')])
-            # ER10: ทุกวันศุกร์
-            if wd == 4:
-                preferred_constraints.append(shifts_var[('ER10', d, 'M')])
+        # [REMOVED] ER5 & ER10 pattern - User จะใช้ฟังก์ชัน Fix เวรแทน
 
         # [REMOVED] ER9 Hardcode - ใช้ fix_requests จาก UI แทน
         # ตอนนี้ ER9 (และคนอื่น) สามารถขอเวร Fix ผ่าน UI ได้
@@ -448,12 +720,13 @@ def solve_schedule(year, month, days_in_month, nurses, requests, er5_er10_patter
                     separation_penalty.append(same_shift)
     
     # รวม soft constraints ทั้งหมดเข้าด้วยกัน
-    # น้ำหนัก: preferred_constraints (M fix) > separation > consecutive_off > off_after_night
+    # น้ำหนัก: preferred_constraints (M fix) > separation > consecutive_off > off_after_night > oc_avoid
     model.Maximize(
         sum(preferred_constraints) * 100 + 
         sum(consecutive_off_constraints) * 5 +
         sum(off_after_night_constraints) -
-        sum(separation_penalty) * 30  # ลบคะแนนเมื่อ ER2-ER7 ซ้อนเวรกัน
+        sum(separation_penalty) * 30 -  # ลบคะแนนเมื่อ ER2-ER7 ซ้อนเวรกัน
+        sum(oc_avoid_penalty) * 20  # ลบคะแนนเมื่อ ER4, ER8 ทำ OC
     )
 
     # Solve
@@ -473,6 +746,7 @@ def solve_schedule(year, month, days_in_month, nurses, requests, er5_er10_patter
                         display = s if s not in ['O'] else ""
                         if s == 'L_T': display = "ลา/อบรม"
                         if s == 'NS': display = "NS"  # แสดง NS (บ่าย+ดึก)
+                        if s == 'OC': display = "📞OC"  # แสดง On-Call
                         if n == 'ER1' and s == 'O': 
                             wd = calendar.weekday(year, month, d)
                             if wd in [0, 1, 2, 3]: display = "NCD"
@@ -506,14 +780,30 @@ with st.sidebar:
     nurses_list = [f'ER{i}' for i in range(1, 11)]
     
     st.markdown("---")
-    st.header("📅 Pattern เวรเช้า ER5/ER10")
-    er5_er10_pattern = st.radio(
-        "เลือก Pattern:",
-        options=['new', 'old'],
-        format_func=lambda x: "🆕 ใหม่: ER5=จันทร์ทุกสัปดาห์, ER10=ศุกร์ทุกสัปดาห์" if x == 'new' else "📆 เก่า (ก.ย.25): ER5=อังคาร wk1,4, ER10=อังคาร wk2,3",
-        index=0,
-        help="เลือก pattern เวรเช้า Fix ของ ER5 และ ER10"
-    )
+    st.header("📞 เวร On-Call (OC)")
+    enable_oc = st.checkbox("เปิดใช้งานเวร On-Call (วันที่ 1-10)", value=False, 
+                            help="เวร OC = Standby ดึก 400 บาท/เวร | ER1,ER7 ห้ามทำ | ER4,ER8 ขอเลี่ยง")
+    
+    st.markdown("---")
+    st.header("📂 ตารางเดือนก่อน")
+    st.caption("Upload ไฟล์ CSV ตารางเดือนก่อน เพื่อใช้กฎข้ามเดือน (N→M, S→N)")
+    
+    prev_month_file = st.file_uploader("เลือกไฟล์ CSV", type=['csv'], key="prev_month_upload")
+    prev_month_data = None
+    
+    if prev_month_file is not None:
+        prev_month_data = parse_previous_month_schedule(prev_month_file, nurses_list)
+        if prev_month_data:
+            st.success(f"✅ อ่านข้อมูล {len(prev_month_data)} พยาบาล")
+            # แสดงเวรวันสุดท้ายของแต่ละคน
+            last_day_info = []
+            for n, shifts in prev_month_data.items():
+                if shifts:
+                    last_day_info.append({'พยาบาล': n, 'เวรวันสุดท้าย': shifts[-1]})
+            if last_day_info:
+                st.dataframe(pd.DataFrame(last_day_info), hide_index=True)
+        else:
+            st.error("❌ ไม่สามารถอ่านไฟล์ได้ ตรวจสอบรูปแบบไฟล์")
     
     st.markdown("---")
     st.header("📝 บันทึกวันลา")
@@ -608,22 +898,35 @@ with st.sidebar:
                 st.warning("⚠️ กรุณาเลือกวันที่หรือวันก่อน")
     
     if st.session_state.fix_requests:
-        # แสดงรายการ fix requests
-        fix_display = []
-        for req in st.session_state.fix_requests:
-            if req.get('month') == month and req.get('year') == year:
-                fix_display.append({
-                    'พยาบาล': req['nurse'],
-                    'เวร': req['shift'],
-                    'วันที่': ', '.join(map(str, req.get('dates', [])))
-                })
-        if fix_display:
-            st.dataframe(pd.DataFrame(fix_display), hide_index=True)
+        # แสดงรายการ fix requests พร้อม checkbox สำหรับลบรายบุคคล
+        st.caption("✅ เลือกรายการที่ต้องการลบ แล้วกดปุ่ม 'ลบรายการที่เลือก'")
         
-        if st.button("🗑️ ล้างคำขอ Fix ทั้งหมด", type="secondary"):
-            st.session_state.fix_requests = []
-            save_fix_requests_to_csv()
-            st.rerun()
+        # เก็บ index ของรายการที่จะลบ
+        indices_to_delete = []
+        
+        for idx, req in enumerate(st.session_state.fix_requests):
+            if req.get('month') == month and req.get('year') == year:
+                col1, col2 = st.columns([0.1, 0.9])
+                with col1:
+                    if st.checkbox("", key=f"del_fix_{idx}", label_visibility="collapsed"):
+                        indices_to_delete.append(idx)
+                with col2:
+                    dates_str = ', '.join(map(str, req.get('dates', [])))
+                    st.write(f"**{req['nurse']}** - เวร **{req['shift']}** - วันที่ {dates_str}")
+        
+        col_btn1, col_btn2 = st.columns(2)
+        with col_btn1:
+            if st.button("🗑️ ลบรายการที่เลือก", type="secondary", disabled=len(indices_to_delete) == 0):
+                # ลบจากท้ายไปหน้าเพื่อไม่ให้ index เลื่อน
+                for idx in sorted(indices_to_delete, reverse=True):
+                    st.session_state.fix_requests.pop(idx)
+                save_fix_requests_to_csv()
+                st.rerun()
+        with col_btn2:
+            if st.button("🗑️ ล้างทั้งหมด", type="secondary"):
+                st.session_state.fix_requests = []
+                save_fix_requests_to_csv()
+                st.rerun()
     
     # ==========================================
     # 👥 กำลังคนพิเศษ (Staffing Override)
@@ -694,14 +997,39 @@ with st.sidebar:
         with st.spinner("กำลังคำนวณและเกลี่ยเวร..."):
             df = solve_schedule(
                 year, month, days_in_month, nurses_list, 
-                st.session_state.requests, er5_er10_pattern,
-                st.session_state.fix_requests, st.session_state.staffing_overrides
+                st.session_state.requests,
+                st.session_state.fix_requests, st.session_state.staffing_overrides,
+                enable_oc=enable_oc, prev_month_data=prev_month_data
             )
             if df is not None:
                 st.session_state.schedule_df = df
                 st.success("จัดตารางสำเร็จ!")
             else:
-                st.error("ไม่สามารถจัดตารางได้! (เงื่อนไขขัดแย้งกัน)")
+                st.error("❌ ไม่สามารถจัดตารางได้! (เงื่อนไขขัดแย้งกัน)")
+                
+                # วิเคราะห์ปัญหา
+                issues = diagnose_scheduling_issues(
+                    year, month, days_in_month, nurses_list,
+                    st.session_state.requests, st.session_state.staffing_overrides, enable_oc
+                )
+                
+                if issues:
+                    st.warning("🔍 **วิเคราะห์ปัญหาที่อาจเกิดขึ้น:**")
+                    for issue in issues[:5]:  # แสดงแค่ 5 ปัญหาแรก
+                        off_str = ", ".join(issue['off_nurses']) if issue['off_nurses'] else "-"
+                        leave_str = ", ".join(issue['leave_nurses']) if issue['leave_nurses'] else "-"
+                        st.markdown(f"""
+**📅 วันที่ {issue['day']} ({issue['weekday']}) - {issue['type']}**
+- 🚫 ขอหยุด: {off_str}
+- 📝 ลา/ประชุม: {leave_str}  
+- 👥 คนว่าง: **{issue['available']} คน**
+- 📊 ต้องการ: M={issue['needed_m']}, S={issue['needed_s']}, N={issue['needed_n']}{f", OC={issue['needed_oc']}" if issue['needed_oc'] > 0 else ""}
+---
+""")
+                    if len(issues) > 5:
+                        st.info(f"...และอีก {len(issues) - 5} วันที่มีปัญหา")
+                else:
+                    st.info("💡 อาจเป็นปัญหาจาก: กฎดึกติดกัน, กฎบ่าย→ดึก, หรือข้อจำกัด ER7 (M+ลา=10)")
 
 # --- Main Content ---
 if st.session_state.schedule_df is not None:
@@ -812,6 +1140,7 @@ if st.session_state.schedule_df is not None:
             c_s = shifts.count('S')
             c_n = shifts.count('N')
             c_ns = shifts.count('NS')  # นับ NS แยก
+            c_oc = sum(1 for s in shifts if '📞OC' in str(s))  # นับ OC
             c_lt = shifts.count('ลา/อบรม')
             
             # รวม ลา/ประชุม กับเวรเช้า
@@ -823,9 +1152,10 @@ if st.session_state.schedule_df is not None:
             # คำนวณเงิน
             # NS ได้ค่าเวร 2 เท่า (บ่าย+ดึก)
             shift_allowance = (c_s + c_n + c_ns * 2) * rate_sn  # NS = 2 เวร
+            oc_allowance = c_oc * 400  # ค่าเวร OC = 400 บาท
             ot_shifts = max(0, total_work - std_work_days) + c_ns  # NS นับเป็น OT ด้วย
             ot_pay = ot_shifts * ot_rate  # เงิน OT
-            total_income = shift_allowance + ot_pay  # รวมเงินทั้งหมด
+            total_income = shift_allowance + oc_allowance + ot_pay  # รวมเงินทั้งหมด
             
             summary_data.append({
                 'ชื่อ': row['Nurse'],
@@ -833,8 +1163,10 @@ if st.session_state.schedule_df is not None:
                 'เวรบ่าย (S)': c_s,
                 'เวรดึก (N)': c_n,
                 'NS (OT)': c_ns,  # แสดง NS แยก
+                'OC': c_oc,  # แสดง On-Call
                 'รวมวันทำงาน': total_work,
                 'ค่าเวร บ่าย/ดึก': f"{shift_allowance:,}",
+                'ค่า OC': f"{oc_allowance:,}",
                 'OT (เวร)': ot_shifts,
                 'เงิน OT': f"{ot_pay:,}",
                 'รวมรายได้สุทธิ': f"{total_income:,}"

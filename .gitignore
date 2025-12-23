@@ -2,3 +2,12 @@ __pycache__/
 *.py[cod]
 .env
 .vscode/
+
+# ===================================
+# Sensitive Data - DO NOT COMMIT
+# ===================================
+# Nurse scheduling data contains personal information
+*.csv
+leave_requests.csv
+fix_requests.csv
+staffing_overrides.csv
