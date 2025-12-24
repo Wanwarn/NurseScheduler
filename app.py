@@ -84,14 +84,18 @@ def load_requests_from_csv():
             if df is not None:
                 # Remove Unnamed columns
                 df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
-                # Keep only valid columns
-                valid_cols = ['nurse', 'date', 'month', 'year', 'type', 'reason']
+                # Keep only valid columns (including new 'priority' column)
+                valid_cols = ['nurse', 'date', 'month', 'year', 'type', 'reason', 'priority']
                 df = df[[c for c in df.columns if c in valid_cols]]
                 
                 # Convert numeric columns to int (handle potential floats)
-                for col in ['date', 'month', 'year']:
+                for col in ['date', 'month', 'year', 'priority']:
                     if col in df.columns:
                         df[col] = df[col].fillna(0).astype(int)
+                
+                # Ensure priority column exists with default value
+                if 'priority' not in df.columns:
+                    df['priority'] = 1
                         
                 return df.to_dict('records')
         except Exception as e:
@@ -632,17 +636,18 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
                 model.Add(shifts_var[(n, d, 'OC')] == 0)
         
         # กฎ OC - OC ต้องห่างกันอย่างน้อย 3 วัน
-        for n in nurses:
+        for n in nurses: # RE-ENABLED Partial
             for d in range(1, min(10, days_in_month)):
-                # ห้าม OC ติดกัน (OC-OC)
+            #     # ห้าม OC ติดกัน (OC-OC)
                 model.Add(shifts_var[(n, d, 'OC')] + shifts_var[(n, d + 1, 'OC')] <= 1)
                 # ห้าม OC แล้วเช้า (OC-M)
                 model.Add(shifts_var[(n, d, 'OC')] + shifts_var[(n, d + 1, 'M')] <= 1)
-                # ห้าม Off แล้ว OC (O-OC)
-                model.Add(shifts_var[(n, d, 'O')] + shifts_var[(n, d + 1, 'OC')] <= 1)
+                # ห้าม Off แล้ว OC (O-OC) -- RELAXED
+                # model.Add(shifts_var[(n, d, 'O')] + shifts_var[(n, d + 1, 'OC')] <= 1)
             
             # OC ต้องห่างกันอย่างน้อย 3 วัน (ในช่วง 1-10)
-            for d in range(1, min(8, days_in_month)):
+            # แก้ไข: Loop ถึงแค่วันที่ d+3 ยังอยู่ในเดือน
+            for d in range(1, min(8, days_in_month - 3 + 1)):
                 model.Add(shifts_var[(n, d, 'OC')] + shifts_var[(n, d + 1, 'OC')] + 
                          shifts_var[(n, d + 2, 'OC')] + shifts_var[(n, d + 3, 'OC')] <= 1)
         
@@ -724,7 +729,12 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         if req_month == month and req_year == year: # ต้องตรงกันเป๊ะๆ ถึงจะเอามาคิด
            if req['nurse'] in nurses:
                 if req['type'] == 'Off':
-                    model.Add(shifts_var[(req['nurse'], req['date'], 'O')] == 1)
+                    # SOFT: พยายามให้หยุดตามขอ แต่ถ้าคนไม่พอ อาจจัดเวรให้แทน
+                    # น้ำหนักตามลำดับ: priority 1 = 10 repeats, priority 2 = 9, ... priority 10 = 1
+                    priority = req.get('priority', 1)
+                    weight = max(1, 11 - priority)  # priority 1 → weight 10, priority 10 → weight 1
+                    for _ in range(weight):
+                        preferred_constraints.append(shifts_var[(req['nurse'], req['date'], 'O')])
                 elif req['type'] == 'Leave_Train':
                     model.Add(shifts_var[(req['nurse'], req['date'], 'L_T')] == 1)
                     allowed_lt.add((req['nurse'], req['date']))
@@ -988,22 +998,24 @@ with st.sidebar:
         r_nurse = st.selectbox("ชื่อพยาบาล", nurses_list)
         r_type = st.radio("ประเภท", ["ขอหยุด (Off)", "ลา/ประชุม (นับงาน)"])
         r_dates = st.multiselect("เลือกวันที่", range(1, days_in_month + 1))
+        r_priority = st.number_input("ลำดับความสำคัญ (1=สำคัญมาก, 10=สำคัญน้อย)", min_value=1, max_value=10, value=1, 
+                                      help="ถ้าคนไม่พอ ลำดับเลขน้อยจะได้หยุดก่อน")
         
         # แก้ไขส่วนบันทึกข้อมูล (เพิ่ม month และ year)
         if st.form_submit_button("เพิ่มรายการ") and r_dates:
             code = 'Off' if 'ขอหยุด' in r_type else 'Leave_Train'
             for d in r_dates:
-                # FIX: บันทึกเดือนและปีไปด้วย!
+                # FIX: บันทึกเดือนและปีไปด้วย + priority
                 st.session_state.requests.append({
                     'nurse': r_nurse,
                     'date': d,
-                    'month': month,  # เพิ่มบรรทัดนี้ (เอาค่ามาจากตัวแปร month ด้านบน)
-                    'year': year,    # เพิ่มบรรทัดนี้
-                    'type': code
+                    'month': month,
+                    'year': year,
+                    'type': code,
+                    'priority': r_priority
                 })
-            # เพิ่ม Code Save ลงไฟล์ทันทีตรงนี้ (ดูข้อ 3)
             save_requests_to_csv() 
-            st.success("เพิ่มแล้ว (จำเดือน/ปี แม่นยำ!)")
+            st.success(f"เพิ่มแล้ว! (ลำดับ {r_priority})")
 
     if st.session_state.requests:
         req_df = pd.DataFrame(st.session_state.requests)
