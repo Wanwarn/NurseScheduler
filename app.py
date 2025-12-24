@@ -87,6 +87,12 @@ def load_requests_from_csv():
                 # Keep only valid columns
                 valid_cols = ['nurse', 'date', 'month', 'year', 'type', 'reason']
                 df = df[[c for c in df.columns if c in valid_cols]]
+                
+                # Convert numeric columns to int (handle potential floats)
+                for col in ['date', 'month', 'year']:
+                    if col in df.columns:
+                        df[col] = df[col].fillna(0).astype(int)
+                        
                 return df.to_dict('records')
         except Exception as e:
             print(f"Error loading {CSV_FILE}: {e}")
