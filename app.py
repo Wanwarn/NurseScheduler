@@ -274,7 +274,9 @@ def parse_previous_month_schedule(uploaded_file, nurses):
             nurse_id = None
             
             # รูปแบบ 1: "ER1", "ER2", ... "ER10"
-            for n in nurses:
+            # เรียงลำดับ nurse ตามความยาวจากมากไปน้อย เพื่อป้องกัน ER1 ไป match กับ ER10
+            sorted_nurses = sorted(nurses, key=len, reverse=True)
+            for n in sorted_nurses:
                 if n in nurse_col:
                     nurse_id = n
                     break
