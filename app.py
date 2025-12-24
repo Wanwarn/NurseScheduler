@@ -379,12 +379,12 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
                     elif override.get('shift') == 'S':
                         s_req = override.get('count', 2)
         
-        # N + NS >= n_req
+        # N + NS >= n_req (RELAXED - อย่างน้อย n_req คน)
         model.Add(sum(shifts_var[(n, d, 'N')] + shifts_var[(n, d, 'NS')] for n in nurses) >= n_req)
-        # S + NS >= s_req
+        # S + NS >= s_req (RELAXED - อย่างน้อย s_req คน)
         model.Add(sum(shifts_var[(n, d, 'S')] + shifts_var[(n, d, 'NS')] for n in nurses) >= s_req)
         req_m = 4 if is_special_day else 3  # เสาร์-อาทิตย์ หรือ วันหยุดนักขัตฤกษ์ = 4 คน
-        model.Add(sum(shifts_var[(n, d, 'M')] for n in nurses) == req_m)
+        model.Add(sum(shifts_var[(n, d, 'M')] for n in nurses) >= req_m)  # RELAXED
 
     # กฎการสลับเวร
     for n in nurses:
@@ -406,25 +406,45 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
     # ==========================================
     # กฎเวรดึก (N) เดี่ยว - ต้องทำงานก่อนดึก และหยุดหลังดึก
     # ==========================================
+    o_before_n_penalty = []  # Soft: O → N ควรหลีกเลี่ยง
+    n_skip_day_penalty = []  # Soft: N-O-N ควรหลีกเลี่ยง
+    
     for n in nurses:
-        # 1. ห้าม N-N, NS-NS, N-NS, NS-N (ดึกติดกัน)
+        # 1. ห้าม N-N, NS-NS, N-NS, NS-N (ดึกติดกัน) - HARD (ต้องบังคับ)
         for d in range(1, days_in_month):
             model.Add(shifts_var[(n, d, 'N')] + shifts_var[(n, d + 1, 'N')] <= 1)
             model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 1, 'NS')] <= 1)
             model.Add(shifts_var[(n, d, 'N')] + shifts_var[(n, d + 1, 'NS')] <= 1)
             model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 1, 'N')] <= 1)
         
-        # 2. ห้าม O-N, O-NS (ต้องทำงานก่อนดึก)
+        # 2. O-N, O-NS (ควรทำงานก่อนดึก) - SOFT (ลดจุด แต่ยอมได้ถ้าจำเป็น)
         for d in range(1, days_in_month):
-            model.Add(shifts_var[(n, d, 'O')] + shifts_var[(n, d + 1, 'N')] <= 1)
-            model.Add(shifts_var[(n, d, 'O')] + shifts_var[(n, d + 1, 'NS')] <= 1)
+            # สร้างตัวแปร penalty แทน hard constraint
+            penalty_on = model.NewBoolVar(f'o_n_penalty_{n}_{d}')
+            model.Add(shifts_var[(n, d, 'O')] + shifts_var[(n, d + 1, 'N')] <= 1 + penalty_on)
+            o_before_n_penalty.append(penalty_on)
+            
+            penalty_ons = model.NewBoolVar(f'o_ns_penalty_{n}_{d}')
+            model.Add(shifts_var[(n, d, 'O')] + shifts_var[(n, d + 1, 'NS')] <= 1 + penalty_ons)
+            o_before_n_penalty.append(penalty_ons)
         
-        # 3. ห้าม N-O-N, NS-O-NS (ห้ามดึกสลับวัน)
+        # 3. N-O-N, NS-O-NS (ควรหลีกเลี่ยงดึกสลับวัน) - SOFT
         for d in range(1, days_in_month - 1):
-            model.Add(shifts_var[(n, d, 'N')] + shifts_var[(n, d + 2, 'N')] <= 1)
-            model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 2, 'NS')] <= 1)
-            model.Add(shifts_var[(n, d, 'N')] + shifts_var[(n, d + 2, 'NS')] <= 1)
-            model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 2, 'N')] <= 1)
+            pen1 = model.NewBoolVar(f'non_pen_{n}_{d}')
+            model.Add(shifts_var[(n, d, 'N')] + shifts_var[(n, d + 2, 'N')] <= 1 + pen1)
+            n_skip_day_penalty.append(pen1)
+            
+            pen2 = model.NewBoolVar(f'nson_pen_{n}_{d}')
+            model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 2, 'NS')] <= 1 + pen2)
+            n_skip_day_penalty.append(pen2)
+            
+            pen3 = model.NewBoolVar(f'n_ns_pen_{n}_{d}')
+            model.Add(shifts_var[(n, d, 'N')] + shifts_var[(n, d + 2, 'NS')] <= 1 + pen3)
+            n_skip_day_penalty.append(pen3)
+            
+            pen4 = model.NewBoolVar(f'ns_n_pen_{n}_{d}')
+            model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 2, 'N')] <= 1 + pen4)
+            n_skip_day_penalty.append(pen4)
 
     # ==========================================
     # กฎเวร NS (บ่าย+ดึก 16 ชม.) - OT Shift (ลดความซับซ้อน)
@@ -505,7 +525,7 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
             for n in oc_hard_ban:
                 model.Add(shifts_var[(n, d, 'OC')] == 0)
         
-        # กฎ OC คล้ายเวรดึก
+        # กฎ OC - OC ต้องห่างกันอย่างน้อย 3 วัน
         for n in nurses:
             for d in range(1, min(10, days_in_month)):
                 # ห้าม OC ติดกัน (OC-OC)
@@ -514,6 +534,11 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
                 model.Add(shifts_var[(n, d, 'OC')] + shifts_var[(n, d + 1, 'M')] <= 1)
                 # ห้าม Off แล้ว OC (O-OC)
                 model.Add(shifts_var[(n, d, 'O')] + shifts_var[(n, d + 1, 'OC')] <= 1)
+            
+            # OC ต้องห่างกันอย่างน้อย 3 วัน (ในช่วง 1-10)
+            for d in range(1, min(8, days_in_month)):
+                model.Add(shifts_var[(n, d, 'OC')] + shifts_var[(n, d + 1, 'OC')] + 
+                         shifts_var[(n, d + 2, 'OC')] + shifts_var[(n, d + 3, 'OC')] <= 1)
         
         # ER4, ER8 ขอเลี่ยง (Soft Constraint - ลด penalty ใน objective)
         for d in range(1, min(11, days_in_month + 1)):
@@ -558,9 +583,9 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         er7_sn_shifts.append(shifts_var[('ER7', d, 'S')])
         er7_sn_shifts.append(shifts_var[('ER7', d, 'N')])
 
-    # ER7 (Hard Fix): เช้า+ลา = 10 (รวมวันลา/ประชุมด้วย), บ่าย+ดึก ไม่เกิน 10
+    # ER7 (Relaxed): เช้า+ลา ไม่เกิน 10 (รวมวันลา/ประชุมด้วย), บ่าย+ดึก ไม่เกิน 10
     er7_lt_shifts = [shifts_var[('ER7', d, 'L_T')] for d in range(1, days_in_month + 1)]
-    model.Add(sum(er7_m_shifts) + sum(er7_lt_shifts) == 10)  # M + ลา/ประชุม = 10
+    model.Add(sum(er7_m_shifts) + sum(er7_lt_shifts) <= 10)  # M + ลา/ประชุม <= 10 (RELAXED)
     model.Add(sum(er7_sn_shifts) <= 10)  # S+N ไม่เกิน 10
     
     # ER7 ดึก (N) สูงสุด 4 เวร/เดือน
@@ -634,12 +659,12 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
                         if calendar.weekday(year, month, d) < 5])  # นับเฉพาะวันหยุดที่ไม่ตรงกับ ส-อา
     target_off_days = weekend_count + holiday_count
     
-    # กำหนดให้ทุกคน (ยกเว้น ER1) มีวันหยุดใกล้เคียงกับ target
+    # กำหนดให้ทุกคน (ยกเว้น ER1) มีวันหยุดใกล้เคียงกับ target (±1)
     for n in rotating_nurses:
         off_days = sum(shifts_var[(n, d, 'O')] for d in range(1, days_in_month + 1))
-        # อนุญาตให้ Off ต่างจาก target ได้ ±2 (เพื่อความยืดหยุ่นกับกฎดึกเดี่ยว)
-        model.Add(off_days >= target_off_days - 2)
-        model.Add(off_days <= target_off_days + 2)
+        # RELAXED: Off อนุญาตให้ต่างจาก target ได้ ±1 วัน
+        model.Add(off_days >= target_off_days - 1)
+        model.Add(off_days <= target_off_days + 1)
     
     # ==========================================
     # 3.2 เกลี่ยวันหยุดพิเศษ (ส-อา + นักขัตฤกษ์) ให้ทุกคนได้หมุนเวียนเท่ากัน
@@ -653,11 +678,11 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
     for n in rotating_nurses:
         special_offs_per_nurse[n] = sum(shifts_var[(n, d, 'O')] for d in special_days)
     
-    # เกลี่ยให้ต่างกันไม่เกิน 2 วัน
+    # RELAXED: เกลี่ยให้ต่างกันไม่เกิน 1 (ยืดหยุ่นขึ้น)
     for n1 in rotating_nurses:
         for n2 in rotating_nurses:
             if n1 != n2:
-                model.Add(special_offs_per_nurse[n1] - special_offs_per_nurse[n2] <= 2)
+                model.Add(special_offs_per_nurse[n1] - special_offs_per_nurse[n2] <= 1)
     
     # ==========================================
     # 4. เกลี่ยเวรบ่าย (S) และดึก (N) แยกกัน ต่างกันไม่เกิน 1
@@ -720,13 +745,15 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
                     separation_penalty.append(same_shift)
     
     # รวม soft constraints ทั้งหมดเข้าด้วยกัน
-    # น้ำหนัก: preferred_constraints (M fix) > separation > consecutive_off > off_after_night > oc_avoid
+    # น้ำหนัก: preferred_constraints (M fix) > separation > O→N penalty > N-O-N penalty > consecutive_off > off_after_night > oc_avoid
     model.Maximize(
         sum(preferred_constraints) * 100 + 
         sum(consecutive_off_constraints) * 5 +
         sum(off_after_night_constraints) -
         sum(separation_penalty) * 30 -  # ลบคะแนนเมื่อ ER2-ER7 ซ้อนเวรกัน
-        sum(oc_avoid_penalty) * 20  # ลบคะแนนเมื่อ ER4, ER8 ทำ OC
+        sum(oc_avoid_penalty) * 20 -  # ลบคะแนนเมื่อ ER4, ER8 ทำ OC
+        sum(o_before_n_penalty) * 15 -  # ลบคะแนนเมื่อ O→N (ควรหลีกเลี่ยง)
+        sum(n_skip_day_penalty) * 10  # ลบคะแนนเมื่อ N-O-N (ดึกสลับวัน)
     )
 
     # Solve
@@ -758,9 +785,9 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         return None
 
 # --- UI Setup ---
-st.set_page_config(page_title="ระบบจัดตารางเวร ER_KPH v2.3", layout="wide")
+st.set_page_config(page_title="ระบบจัดตารางเวร ER_KPH v2.4", layout="wide")
 st.title("🏥 ระบบจัดตารางเวรพยาบาล (ER_KPH)")
-st.caption("**v2.3** | 🆕 ขอเวร Fix ผ่าน UI | กำลังคนพิเศษตามช่วงวันที่ | เกลี่ย ส-อา/นักขัตฤกษ์")
+st.caption("**v2.4** | 🆕 ผ่อนคลาย Constraints | Debug ตารางคำขอ | ขอเวร Fix ผ่าน UI")
 
 # Session State
 if 'schedule_df' not in st.session_state: st.session_state.schedule_df = None
@@ -1030,10 +1057,96 @@ with st.sidebar:
                         st.info(f"...และอีก {len(issues) - 5} วันที่มีปัญหา")
                 else:
                     st.info("💡 อาจเป็นปัญหาจาก: กฎดึกติดกัน, กฎบ่าย→ดึก, หรือข้อจำกัด ER7 (M+ลา=10)")
+                
+                # ==========================================
+                # DEBUG: แสดงตารางสรุปคำขอทั้งหมด
+                # ==========================================
+                st.markdown("---")
+                st.subheader("📋 สรุปคำขอทั้งหมด (Debug)")
+                
+                # สร้างตารางแสดงคำขอ
+                debug_data = []
+                
+                # 1. วันลา/ประชุม (Leave_Train)
+                for req in st.session_state.requests:
+                    if req.get('month') == month and req.get('year') == year:
+                        if req.get('type') == 'Leave_Train':
+                            debug_data.append({
+                                'พยาบาล': req.get('nurse'),
+                                'วันที่': req.get('date'),
+                                'ประเภท': '📝 ลา/ประชุม (L_T)',
+                                'หมายเหตุ': req.get('reason', '-')
+                            })
+                
+                # 2. ขอหยุด (Off)
+                for req in st.session_state.requests:
+                    if req.get('month') == month and req.get('year') == year:
+                        if req.get('type') == 'Off':
+                            debug_data.append({
+                                'พยาบาล': req.get('nurse'),
+                                'วันที่': req.get('date'),
+                                'ประเภท': '🚫 ขอหยุด (Off)',
+                                'หมายเหตุ': req.get('reason', '-')
+                            })
+                
+                # 3. ขอเวร Fix
+                for req in st.session_state.fix_requests:
+                    if req.get('month') == month and req.get('year') == year:
+                        dates = req.get('dates', [])
+                        for d in dates:
+                            debug_data.append({
+                                'พยาบาล': req.get('nurse'),
+                                'วันที่': d,
+                                'ประเภท': f"📌 Fix เวร {req.get('shift')}",
+                                'หมายเหตุ': f"ขอเวร {req.get('shift')}"
+                            })
+                
+                if debug_data:
+                    # เรียงตามวันที่
+                    debug_df = pd.DataFrame(debug_data)
+                    debug_df = debug_df.sort_values(by=['วันที่', 'พยาบาล'])
+                    st.dataframe(debug_df, hide_index=True, use_container_width=True)
+                    
+                    # สรุปรายวัน (หาวันที่มีหลายคนขอ)
+                    st.markdown("### 🔍 วันที่มีคำขอหลายรายการ")
+                    day_counts = debug_df.groupby('วันที่').size().reset_index(name='จำนวนคำขอ')
+                    multi_request_days = day_counts[day_counts['จำนวนคำขอ'] > 1]
+                    if not multi_request_days.empty:
+                        for _, row in multi_request_days.iterrows():
+                            d = row['วันที่']
+                            count = row['จำนวนคำขอ']
+                            day_detail = debug_df[debug_df['วันที่'] == d]
+                            nurses_str = ", ".join(f"{r['พยาบาล']}({r['ประเภท'].split()[0]})" for _, r in day_detail.iterrows())
+                            st.warning(f"📅 **วันที่ {d}**: {count} คำขอ → {nurses_str}")
+                    else:
+                        st.success("✅ ไม่มีวันที่มีคำขอซ้ำซ้อน")
+                    
+                    # หาคนที่มีคำขอซ้อนกัน (ขอ Off แต่ก็ขอ Fix ด้วย)
+                    st.markdown("### ⚠️ ตรวจสอบคำขอที่ขัดกัน")
+                    conflicts = []
+                    for nurse in nurses_list:
+                        nurse_reqs = debug_df[debug_df['พยาบาล'] == nurse]
+                        for d in nurse_reqs['วันที่'].unique():
+                            day_reqs = nurse_reqs[nurse_reqs['วันที่'] == d]
+                            if len(day_reqs) > 1:
+                                types = day_reqs['ประเภท'].tolist()
+                                conflicts.append({
+                                    'พยาบาล': nurse,
+                                    'วันที่': d,
+                                    'คำขอ': " + ".join(types)
+                                })
+                    
+                    if conflicts:
+                        for c in conflicts:
+                            st.error(f"❌ **{c['พยาบาล']}** วันที่ {c['วันที่']}: {c['คำขอ']}")
+                    else:
+                        st.success("✅ ไม่มีคำขอที่ขัดกัน (คนเดียวกันวันเดียวกัน)")
+                else:
+                    st.info("ไม่มีคำขอใดๆ ในเดือนนี้")
 
 # --- Main Content ---
 if st.session_state.schedule_df is not None:
-    tab1, tab2, tab3 = st.tabs(["📅 ตารางเวร", "💰 ค่าตอบแทนและค่าเวร", "📅 ปฏิทินวันหยุด"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📅 ตารางเวร", "💰 ค่าตอบแทนและค่าเวร", "📅 ปฏิทินวันหยุด", "📊 คะแนน"])
     
     with tab1:
         st.subheader(f"ตารางเวรเดือน {month}/{year}")
@@ -1202,3 +1315,114 @@ if st.session_state.schedule_df is not None:
         st.markdown("---")
         st.metric("วันเสาร์-อาทิตย์ในเดือนนี้", f"{weekend_count} วัน", delta=None)
         st.metric("วันหยุดนักขัตฤกษ์ในเดือนนี้", f"{holiday_count} วัน", delta=None)
+    
+    with tab4:
+        st.subheader("📊 คะแนนความยุติธรรมและความสมดุล")
+        
+        df = st.session_state.schedule_df
+        nurses_list = [f'ER{i}' for i in range(1, 11)]
+        
+        # คำนวณวัน ส-อา และวันหยุดนักขัตฤกษ์
+        weekend_days = [d for d in range(1, days_in_month + 1) if calendar.weekday(year, month, d) >= 5]
+        holiday_days = THAI_HOLIDAYS.get(year, {}).get(month, [])
+        special_days = list(set(weekend_days + holiday_days))
+        
+        # คำนวณคะแนนแต่ละคน
+        score_data = []
+        for _, row in df.iterrows():
+            nurse_name = str(row.iloc[0])
+            nurse_id = None
+            for nid in nurses_list:
+                if nid in nurse_name:
+                    nurse_id = nid
+                    break
+            if not nurse_id:
+                continue
+            
+            # 1. นับวันหยุดในวัน ส-อา/นักขัตฤกษ์
+            off_on_special = 0
+            for d in special_days:
+                col = str(d)
+                for c in df.columns:
+                    if str(d) in str(c):
+                        col = c
+                        break
+                if col in row.index:
+                    val = str(row[col])
+                    if val in ['O', ''] or 'NCD' in val:
+                        off_on_special += 1
+            
+            # 2. นับเวร S, N (ไม่รวม NS)
+            c_s = 0
+            c_n = 0
+            c_ns = 0
+            for col in df.columns[1:]:
+                val = str(row[col])
+                if val == 'S':
+                    c_s += 1
+                elif val == 'N':
+                    c_n += 1
+                elif val == 'NS' or 'NS' in val:
+                    c_ns += 1
+            
+            # 3. เช็ค Fix Request Compliance
+            fix_total = 0
+            fix_matched = 0
+            for fix in st.session_state.fix_requests:
+                if fix.get('nurse') == nurse_id and fix.get('month') == month and fix.get('year') == year:
+                    fix_total += 1
+                    d = fix.get('date')
+                    shift = fix.get('shift')
+                    col = str(d)
+                    for c in df.columns:
+                        if str(d) in str(c):
+                            col = c
+                            break
+                    if col in row.index:
+                        actual = str(row[col])
+                        if shift in actual:
+                            fix_matched += 1
+            
+            fix_rate = (fix_matched / fix_total * 100) if fix_total > 0 else None
+            
+            score_data.append({
+                'พยาบาล': nurse_name,
+                '🏖️ หยุด ส-อา/นักขัตฤกษ์': f"{off_on_special}/{len(special_days)}",
+                '🌅 เวร S': c_s,
+                '🌙 เวร N': c_n,
+                '🌙🌅 เวร NS': c_ns,
+                '⚖️ S+N (สมดุล)': c_s + c_n,
+                '✅ Fix Rate': f"{fix_rate:.0f}%" if fix_rate is not None else "ไม่มี"
+            })
+        
+        if score_data:
+            score_df = pd.DataFrame(score_data)
+            st.dataframe(score_df, hide_index=True, width='stretch')
+            
+            # สถิติ
+            st.markdown("---")
+            col1, col2, col3 = st.columns(3)
+            
+            # ความยุติธรรม ส-อา
+            off_counts = [int(s['🏖️ หยุด ส-อา/นักขัตฤกษ์'].split('/')[0]) for s in score_data if 'ER1' not in s['พยาบาล']]
+            if off_counts:
+                with col1:
+                    avg_off = sum(off_counts) / len(off_counts)
+                    st.metric("⌀ หยุด ส-อา (ไม่รวม ER1)", f"{avg_off:.1f} วัน")
+                    st.caption(f"ต่ำสุด: {min(off_counts)}, สูงสุด: {max(off_counts)}")
+            
+            # ความสมดุล S+N
+            sn_counts = [s['⚖️ S+N (สมดุล)'] for s in score_data if 'ER1' not in s['พยาบาล'] and 'ER7' not in s['พยาบาล']]
+            if sn_counts:
+                with col2:
+                    avg_sn = sum(sn_counts) / len(sn_counts)
+                    st.metric("⌀ เวร S+N (ไม่รวม ER1,7)", f"{avg_sn:.1f}")
+                    st.caption(f"ต่ำสุด: {min(sn_counts)}, สูงสุด: {max(sn_counts)}")
+            
+            # Fix Rate
+            fix_rates = [float(s['✅ Fix Rate'].replace('%', '')) for s in score_data if s['✅ Fix Rate'] != 'ไม่มี']
+            if fix_rates:
+                with col3:
+                    avg_fix = sum(fix_rates) / len(fix_rates)
+                    st.metric("⌀ Fix Request สำเร็จ", f"{avg_fix:.0f}%")
+                    st.caption(f"ต่ำสุด: {min(fix_rates):.0f}%, สูงสุด: {max(fix_rates):.0f}%")
