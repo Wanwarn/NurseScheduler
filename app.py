@@ -902,8 +902,35 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
 
 # --- UI Setup ---
 st.set_page_config(page_title="ระบบจัดตารางเวร ER_KPH v2.4", layout="wide")
+
+# --- Password Protection ---
+def check_password():
+    """Returns True if password is correct"""
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
+    
+    if st.session_state.authenticated:
+        return True
+    
+    st.title("🔐 เข้าสู่ระบบ")
+    password = st.text_input("รหัสผ่าน", type="password")
+    
+    if st.button("เข้าสู่ระบบ"):
+        # เปลี่ยนรหัสผ่านตรงนี้ได้เลย
+        if password == "er_kph2024":
+            st.session_state.authenticated = True
+            st.rerun()
+        else:
+            st.error("❌ รหัสผ่านไม่ถูกต้อง")
+    
+    st.info("💡 ติดต่อผู้ดูแลระบบเพื่อขอรหัสผ่าน")
+    return False
+
+if not check_password():
+    st.stop()
+
 st.title("🏥 ระบบจัดตารางเวรพยาบาล (ER_KPH)")
-st.caption("**v2.4** | 🆕 ผ่อนคลาย Constraints | Debug ตารางคำขอ | ขอเวร Fix ผ่าน UI")
+st.caption("**v2.4** | 🆕 ผ่อนคลาย Constraints | Debug ตารางคำขอ | ขอเวร Fix ผ่าน UI | 🔐 Protected")
 
 # Session State
 if 'schedule_df' not in st.session_state: st.session_state.schedule_df = None
