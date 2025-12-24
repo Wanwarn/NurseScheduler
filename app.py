@@ -71,14 +71,34 @@ STAFFING_OVERRIDES_FILE = "staffing_overrides.csv"
 
 def load_requests_from_csv():
     if os.path.exists(CSV_FILE):
-        df = pd.read_csv(CSV_FILE)
-        return df.to_dict('records')
+        try:
+            # Try cleaning up previous mess
+            df = None
+            for encoding in ['utf-8', 'cp874', 'utf-16', 'tis-620']:
+                try:
+                    df = pd.read_csv(CSV_FILE, encoding=encoding)
+                    break
+                except:
+                    continue
+            
+            if df is not None:
+                # Remove Unnamed columns
+                df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+                # Keep only valid columns
+                valid_cols = ['nurse', 'date', 'month', 'year', 'type', 'reason']
+                df = df[[c for c in df.columns if c in valid_cols]]
+                return df.to_dict('records')
+        except Exception as e:
+            print(f"Error loading {CSV_FILE}: {e}")
+            return []
     return []
 
 def save_requests_to_csv():
     if st.session_state.requests:
         df = pd.DataFrame(st.session_state.requests)
-        df.to_csv(CSV_FILE, index=False)
+        # Remove Unnamed columns before saving
+        df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+        df.to_csv(CSV_FILE, index=False, encoding='utf-8')
     else:
         if os.path.exists(CSV_FILE):
             os.remove(CSV_FILE)
