@@ -230,10 +230,62 @@ def diagnose_scheduling_issues(year, month, days_in_month, nurses, requests, sta
                 'needed_m': req_m,
                 'needed_s': req_s,
                 'needed_n': req_n,
-                'needed_oc': req_oc
+                'needed_oc': req_oc,
+                'er1_status': 'หยุดเสาร์-อาทิตย์/นักขัตฤกษ์' if 'ER1' in available and is_special_day and weekday != 4 else 'พร้อม'
             })
     
     return issues
+
+def generate_diagnosis_md(issues, total_nurses=10):
+    """สร้างรายงานปัญหาแบบละเอียด"""
+    md = []
+    
+    # Group issues by exact same problem type for summary? No, user wants case by case.
+    
+    md.append("### ⚠️ พบปัญหาในการจัดเวร")
+    md.append("ระบบไม่สามารถจัดตารางได้เนื่องจาก **คนไม่พอ** ในบางวันครับ")
+    md.append("")
+    
+    for issue in issues:
+        d = issue['day']
+        wd = issue['weekday']
+        
+        # Calculate totals
+        total_off = len(issue['off_nurses']) + len(issue['leave_nurses'])
+        
+        # Special check for ER1 implicit off
+        er1_note = ""
+        er1_off = 0
+        if issue['er1_status'].startswith('หยุด'):
+             er1_note = f"\n*   **ER1:** {issue['er1_status']} (ตามเงื่อนไข Fix) -> รวมเป็นคนหยุด {total_off + 1} คน"
+             er1_off = 1
+        
+        needed_total = issue['needed_m'] + issue['needed_s'] + issue['needed_n'] + issue['needed_oc']
+        available_real = issue['available'] - er1_off
+        missing = needed_total - available_real
+        
+        # Format the block
+        md.append(f"#### 📅 วันที่ {d} ({wd})")
+        
+        # List who is off/leave
+        who_off = []
+        if issue['off_nurses']:
+            who_off.append(f"ขอหยุด: {', '.join(issue['off_nurses'])}")
+        if issue['leave_nurses']:
+            who_off.append(f"ลา/ประชุม: {', '.join(issue['leave_nurses'])}")
+            
+        md.append(f"*   **คนขอหยุด/ลา:** {total_off} คน ({'; '.join(who_off)}){er1_note}")
+        md.append(f"*   **เหลือคนทำงาน:** {total_nurses} - {total_off + er1_off} = **{available_real} คน**")
+        md.append(f"*   **ความต้องการขั้นต่ำ:** เช้า({issue['needed_m']}) + บ่าย({issue['needed_s']}) + ดึก({issue['needed_n']}) = **{needed_total} คน**")
+        md.append(f"*   **ผลลัพธ์:** คนขาด {missing} คน (มี {available_real} แต่ต้องการ {needed_total}) ทำให้จัดไม่ได้ครับ")
+        md.append("")
+    
+    md.append("### 💡 วิธีแก้ไข")
+    md.append("*   **ลดคนลา:** ในวันที่มีปัญหา ต้องมีคนขอหยุด/ลาให้น้อยลง เพื่อให้เหลือคนพอ")
+    md.append("*   **ลดเวร:** ใช้เมนู **'👥 กำลังคนพิเศษ'** เพื่อลดจำนวนเวรเช้า (M) ในวันนั้นๆ ลง (เช่น จาก 4 เหลือ 3)")
+    md.append("")
+    
+    return "\n".join(md)
 
 def parse_previous_month_schedule(uploaded_file, nurses):
     """อ่านไฟล์ตารางเดือนก่อนและดึงข้อมูล 7 วันสุดท้าย"""
@@ -1138,22 +1190,23 @@ with st.sidebar:
                 )
                 
                 if issues:
-                    st.warning("🔍 **วิเคราะห์ปัญหาที่อาจเกิดขึ้น:**")
-                    for issue in issues[:5]:  # แสดงแค่ 5 ปัญหาแรก
-                        off_str = ", ".join(issue['off_nurses']) if issue['off_nurses'] else "-"
-                        leave_str = ", ".join(issue['leave_nurses']) if issue['leave_nurses'] else "-"
-                        st.markdown(f"""
-**📅 วันที่ {issue['day']} ({issue['weekday']}) - {issue['type']}**
-- 🚫 ขอหยุด: {off_str}
-- 📝 ลา/ประชุม: {leave_str}  
-- 👥 คนว่าง: **{issue['available']} คน**
-- 📊 ต้องการ: M={issue['needed_m']}, S={issue['needed_s']}, N={issue['needed_n']}{f", OC={issue['needed_oc']}" if issue['needed_oc'] > 0 else ""}
----
-""")
-                    if len(issues) > 5:
-                        st.info(f"...และอีก {len(issues) - 5} วันที่มีปัญหา")
+                    st.error("⚠️ ไม่สามารถจัดตารางได้ เนื่องจากคนไม่พอในบางวัน")
+                    
+                    # Generate and display detailed report
+                    report_md = generate_diagnosis_md(issues)
+                    st.markdown(report_md)
+                    
+                    # Old expander usage (can remove or keep as raw data)
+                    with st.expander("ดูข้อมูลดิบ (JSON)"):
+                        st.json(issues)
                 else:
-                    st.info("💡 อาจเป็นปัญหาจาก: กฎดึกติดกัน, กฎบ่าย→ดึก, หรือข้อจำกัด ER7 (M+ลา=10)")
+                    st.error("💡 จัดตารางไม่สำเร็จ อาจเกิดจาก:")
+                    st.markdown("""
+                    *   กฎดึกติดกัน (N -> N)
+                    *   กฎบ่ายต่อดึก (S -> M)
+                    *   ข้อจำกัดพยาบาลเฉพาะ (ER7 M+ลา <= 10)
+                    *   กฎ 7 วันทำงานติดกัน
+                    """)
                 
                 # ==========================================
                 # DEBUG: แสดงตารางสรุปคำขอทั้งหมด
