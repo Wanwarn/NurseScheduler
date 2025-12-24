@@ -85,10 +85,22 @@ def save_requests_to_csv():
 
 def load_fix_requests_from_csv():
     if os.path.exists(FIX_REQUESTS_FILE):
-        df = pd.read_csv(FIX_REQUESTS_FILE)
-        # Convert dates string back to list
-        df['dates'] = df['dates'].apply(lambda x: [int(d) for d in str(x).split(',')] if pd.notna(x) else [])
-        return df.to_dict('records')
+        try:
+            df = pd.read_csv(FIX_REQUESTS_FILE)
+            # Check for encoding issues (if columns look weird or missing)
+            if 'dates' not in df.columns:
+                try:
+                    df = pd.read_csv(FIX_REQUESTS_FILE, encoding='utf-16')
+                except:
+                    pass
+            
+            if 'dates' in df.columns:
+                # Convert dates string back to list
+                df['dates'] = df['dates'].apply(lambda x: [int(d) for d in str(x).split(',')] if pd.notna(x) and str(x).strip() != '' else [])
+                return df.to_dict('records')
+        except Exception as e:
+            print(f"Error loading {FIX_REQUESTS_FILE}: {e}")
+            return []
     return []
 
 def save_fix_requests_to_csv():
@@ -203,7 +215,21 @@ def parse_previous_month_schedule(uploaded_file, nurses):
         return None
     
     try:
-        df = pd.read_csv(uploaded_file)
+        # ลองอ่านไฟล์ด้วย encoding ต่างๆ
+        df = None
+        for encoding in ['utf-8', 'cp874', 'utf-16', 'tis-620']:
+            try:
+                df = pd.read_csv(uploaded_file, encoding=encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+            except Exception as e:
+                # ถ้าเป็น error อื่นๆ (เช่น separators) อาจจะข้ามไป
+                continue
+        
+        if df is None:
+            return None
+
         
         # หา column ที่เป็นตัวเลข (วันที่)
         date_cols = [col for col in df.columns if col.isdigit() or any(c.isdigit() for c in str(col))]
@@ -815,22 +841,65 @@ with st.sidebar:
     st.header("📂 ตารางเดือนก่อน")
     st.caption("Upload ไฟล์ CSV ตารางเดือนก่อน เพื่อใช้กฎข้ามเดือน (N→M, S→N)")
     
-    prev_month_file = st.file_uploader("เลือกไฟล์ CSV", type=['csv'], key="prev_month_upload")
+    tab_upload, tab_manual = st.tabs(["📂 Upload CSV", "✍️ Manual Entry"])
     prev_month_data = None
-    
-    if prev_month_file is not None:
-        prev_month_data = parse_previous_month_schedule(prev_month_file, nurses_list)
-        if prev_month_data:
-            st.success(f"✅ อ่านข้อมูล {len(prev_month_data)} พยาบาล")
-            # แสดงเวรวันสุดท้ายของแต่ละคน
-            last_day_info = []
-            for n, shifts in prev_month_data.items():
-                if shifts:
-                    last_day_info.append({'พยาบาล': n, 'เวรวันสุดท้าย': shifts[-1]})
-            if last_day_info:
-                st.dataframe(pd.DataFrame(last_day_info), hide_index=True)
-        else:
-            st.error("❌ ไม่สามารถอ่านไฟล์ได้ ตรวจสอบรูปแบบไฟล์")
+
+    with tab_upload:
+        prev_month_file = st.file_uploader("เลือกไฟล์ CSV", type=['csv'], key="prev_month_upload")
+        
+        if prev_month_file is not None:
+            prev_month_data = parse_previous_month_schedule(prev_month_file, nurses_list)
+            if prev_month_data:
+                st.success(f"✅ อ่านข้อมูล {len(prev_month_data)} พยาบาล")
+                # แสดงเวรวันสุดท้ายของแต่ละคน
+                last_day_info = []
+                for n, shifts in prev_month_data.items():
+                    if shifts:
+                        last_day_info.append({'พยาบาล': n, 'เวรวันสุดท้าย': shifts[-1]})
+                if last_day_info:
+                    st.dataframe(pd.DataFrame(last_day_info), hide_index=True)
+            else:
+                st.error("❌ ไม่สามารถอ่านไฟล์ได้ ตรวจสอบ Encoding หรือรูปแบบไฟล์")
+
+    with tab_manual:
+        st.caption("หรือกรอกข้อมูลเวร 7 วันสุดท้ายของเดือนก่อนด้วยตัวคุณเอง (M, S, N, O, NS)")
+        
+        # Init manual data
+        if 'manual_prev_data' not in st.session_state:
+            rows = []
+            for n in nurses_list:
+                rows.append({
+                    'Nurse': n, 
+                    'D-7': '', 'D-6': '', 'D-5': '', 'D-4': '', 'D-3': '', 'D-2': '', 'D-1 (วานนี้)': ''
+                })
+            st.session_state.manual_prev_data = pd.DataFrame(rows)
+
+        edited_prev = st.data_editor(
+            st.session_state.manual_prev_data, 
+            key="manual_prev_editor",
+            hide_index=True,
+            num_rows="fixed"
+        )
+        st.session_state.manual_prev_data = edited_prev
+
+        use_manual = st.checkbox("✅ ใช้ข้อมูลจากตาราง Manual นี้", value=False)
+        
+        if use_manual:
+            # Convert DF to dict for solver
+            prev_month_data = {}
+            # Columns to read
+            cols = ['D-7', 'D-6', 'D-5', 'D-4', 'D-3', 'D-2', 'D-1 (วานนี้)']
+            for _, row in edited_prev.iterrows():
+                nurse_id = row['Nurse']
+                shifts = []
+                for c in cols:
+                    val = str(row[c]).strip().upper()
+                    if val in ['M', 'S', 'N', 'NS', 'L_T', 'O', '']:
+                        shifts.append(val if val else 'O')
+                    else:
+                        shifts.append('O') # Default to Off if invalid
+                prev_month_data[nurse_id] = shifts
+            st.info(f"ใช้ข้อมูล Manual Entry สำหรับ {len(prev_month_data)} พยาบาล")
     
     st.markdown("---")
     st.header("📝 บันทึกวันลา")
