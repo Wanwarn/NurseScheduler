@@ -958,7 +958,7 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         return None
 
 # --- UI Setup ---
-st.set_page_config(page_title="ระบบจัดตารางเวร ER_KPH v2.5", layout="wide")
+st.set_page_config(page_title="ระบบจัดตารางเวร ER_KPH v2.6", layout="wide")
 
 # --- Password Protection ---
 def check_password():
