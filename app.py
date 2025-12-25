@@ -496,15 +496,27 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         req_m = 4 if is_special_day else 3  # เสาร์-อาทิตย์ หรือ วันหยุดนักขัตฤกษ์ = 4 คน
         model.Add(sum(shifts_var[(n, d, 'M')] for n in nurses) >= req_m)  # RELAXED
 
-    # กฎการสลับเวร
+    # กฎการสลับเวร - SOFT (ควรหลีกเลี่ยง แต่ยอมได้ถ้าจำเป็น)
+    s_n_penalty = []
     for n in nurses:
         for d in range(1, days_in_month):
-            # ห้าม S -> N (บ่ายตามด้วยดึก)
-            model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'N')] <= 1)
-            model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'NS')] <= 1)
-            # ห้าม N -> S (ดึกตามด้วยบ่าย)
-            model.Add(shifts_var[(n, d, 'N')] + shifts_var[(n, d + 1, 'S')] <= 1)
-            model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 1, 'S')] <= 1)
+            # S -> N (บ่ายตามด้วยดึก) - SOFT
+            pen_sn = model.NewBoolVar(f'sn_pen_{n}_{d}')
+            model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'N')] <= 1 + pen_sn)
+            s_n_penalty.append(pen_sn)
+            
+            pen_sns = model.NewBoolVar(f'sns_pen_{n}_{d}')
+            model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'NS')] <= 1 + pen_sns)
+            s_n_penalty.append(pen_sns)
+            
+            # N -> S (ดึกตามด้วยบ่าย) - SOFT
+            pen_ns = model.NewBoolVar(f'ns_pen_{n}_{d}')
+            model.Add(shifts_var[(n, d, 'N')] + shifts_var[(n, d + 1, 'S')] <= 1 + pen_ns)
+            s_n_penalty.append(pen_ns)
+            
+            pen_nss = model.NewBoolVar(f'nss_pen_{n}_{d}')
+            model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 1, 'S')] <= 1 + pen_nss)
+            s_n_penalty.append(pen_nss)
     
     # ห้าม S -> M -> N (บ่าย -> เช้า -> ดึก ใน 3 วันติด)
     # เหตุผล: พัก 8hr-8hr เหนื่อยมาก
@@ -608,11 +620,13 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
                      shifts_var[(n, d + 2, 'NS')] + shifts_var[(n, d + 3, 'NS')] + 
                      shifts_var[(n, d + 4, 'NS')] <= 1)
         
-        # หลัง NS ต้อง Off วันถัดไป (1 วัน - hard)
+        # หลัง NS ควร Off วันถัดไป (1 วัน) - SOFT (ควรหลีกเลี่ยง แต่ยอมได้)
         for d in range(1, days_in_month):
-            # NS วันที่ d → วันที่ d+1 ห้ามทำงาน (ต้องเป็น O)
+            # NS วันที่ d → วันที่ d+1 ควรหยุด (SOFT)
             for work_s in ['S', 'M', 'N', 'NS']:
-                model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 1, work_s)] <= 1)
+                pen_ns_work = model.NewBoolVar(f'ns_work_pen_{n}_{d}_{work_s}')
+                model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 1, work_s)] <= 1 + pen_ns_work)
+                o_before_n_penalty.append(pen_ns_work)  # reuse penalty list
     
     # ER1 และ ER7 ห้ามทำ NS
     for d in range(1, days_in_month + 1):
@@ -909,6 +923,7 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         sum(separation_penalty) * 30 -  # ลบคะแนนเมื่อ ER2-ER7 ซ้อนเวรกัน
         sum(n_consecutive_penalty) * 25 -  # ลบคะแนนเมื่อ N→N ในช่วง OC (ควรหลีกเลี่ยง)
         sum(oc_avoid_penalty) * 20 -  # ลบคะแนนเมื่อ ER4, ER8 ทำ OC
+        sum(s_n_penalty) * 18 -  # ลบคะแนนเมื่อ S→N หรือ N→S (ควรหลีกเลี่ยง)
         sum(o_before_n_penalty) * 15 -  # ลบคะแนนเมื่อ O→N (ควรหลีกเลี่ยง)
         sum(s_m_n_penalty) * 12 -  # ลบคะแนนเมื่อ S→M→N ในช่วง OC
         sum(n_skip_day_penalty) * 10  # ลบคะแนนเมื่อ N-O-N (ดึกสลับวัน)
