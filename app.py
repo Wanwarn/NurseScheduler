@@ -506,18 +506,13 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
             model.Add(shifts_var[(n, d, 'N')] + shifts_var[(n, d + 1, 'S')] <= 1)
             model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 1, 'S')] <= 1)
     
-    # ห้าม S -> M -> N (บ่าย -> เช้า -> ดึก ใน 3 วันติด) - SOFT (ควรหลีกเลี่ยง)
-    s_m_n_penalty = []
+    # ห้าม S -> M -> N (บ่าย -> เช้า -> ดึก ใน 3 วันติด) - HARD
+    # เหตุผล: พัก 8hr-8hr เหนื่อยมาก แต่ S→M→M→N (4 วัน) ยอมได้เพราะมีพักมากกว่า
     for n in nurses:
         for d in range(1, days_in_month - 1):
-            # ถ้า S วันที่ d และ M วันที่ d+1 → ไม่ควร N วันที่ d+2 (SOFT)
-            pen_smn = model.NewBoolVar(f'smn_pen_{n}_{d}')
-            model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'M')] + shifts_var[(n, d + 2, 'N')] <= 2 + pen_smn)
-            s_m_n_penalty.append(pen_smn)
-            
-            pen_smns = model.NewBoolVar(f'smns_pen_{n}_{d}')
-            model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'M')] + shifts_var[(n, d + 2, 'NS')] <= 2 + pen_smns)
-            s_m_n_penalty.append(pen_smns)
+            # ถ้า S วันที่ d และ M วันที่ d+1 → ห้าม N วันที่ d+2
+            model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'M')] + shifts_var[(n, d + 2, 'N')] <= 2)
+            model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'M')] + shifts_var[(n, d + 2, 'NS')] <= 2)
 
     # ==========================================
     # กฎเวรดึก (N) เดี่ยว - ต้องทำงานก่อนดึก และหยุดหลังดึก
@@ -901,7 +896,6 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         sum(n_consecutive_penalty) * 25 -  # ลบคะแนนเมื่อ N→N ในช่วง OC (ควรหลีกเลี่ยง)
         sum(oc_avoid_penalty) * 20 -  # ลบคะแนนเมื่อ ER4, ER8 ทำ OC
         sum(o_before_n_penalty) * 15 -  # ลบคะแนนเมื่อ O→N (ควรหลีกเลี่ยง)
-        sum(s_m_n_penalty) * 12 -  # ลบคะแนนเมื่อ S→M→N (ควรหลีกเลี่ยง)
         sum(n_skip_day_penalty) * 10  # ลบคะแนนเมื่อ N-O-N (ดึกสลับวัน)
     )
 
