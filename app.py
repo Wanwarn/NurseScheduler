@@ -519,13 +519,38 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
     o_before_n_penalty = []  # Soft: O → N ควรหลีกเลี่ยง
     n_skip_day_penalty = []  # Soft: N-O-N ควรหลีกเลี่ยง
     
+    n_consecutive_penalty = []  # Soft: N→N ในช่วง OC
+    
     for n in nurses:
-        # 1. ห้าม N-N, NS-NS, N-NS, NS-N (ดึกติดกัน) - HARD (ต้องบังคับ)
+        # 1. ห้าม N-N, NS-NS, N-NS, NS-N (ดึกติดกัน)
+        # - ช่วง OC (วันที่ 1-10): SOFT (ยอมได้ถ้าจำเป็น แต่หักคะแนน)
+        # - ช่วงอื่น (วันที่ 11+): HARD (ห้ามเด็ดขาด)
         for d in range(1, days_in_month):
-            model.Add(shifts_var[(n, d, 'N')] + shifts_var[(n, d + 1, 'N')] <= 1)
-            model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 1, 'NS')] <= 1)
-            model.Add(shifts_var[(n, d, 'N')] + shifts_var[(n, d + 1, 'NS')] <= 1)
-            model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 1, 'N')] <= 1)
+            is_oc_period = enable_oc and d <= 10
+            
+            if is_oc_period:
+                # SOFT constraint during OC period - allow but penalize
+                pen_nn = model.NewBoolVar(f'nn_pen_{n}_{d}')
+                model.Add(shifts_var[(n, d, 'N')] + shifts_var[(n, d + 1, 'N')] <= 1 + pen_nn)
+                n_consecutive_penalty.append(pen_nn)
+                
+                pen_nsns = model.NewBoolVar(f'nsns_pen_{n}_{d}')
+                model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 1, 'NS')] <= 1 + pen_nsns)
+                n_consecutive_penalty.append(pen_nsns)
+                
+                pen_nns = model.NewBoolVar(f'nns_pen_{n}_{d}')
+                model.Add(shifts_var[(n, d, 'N')] + shifts_var[(n, d + 1, 'NS')] <= 1 + pen_nns)
+                n_consecutive_penalty.append(pen_nns)
+                
+                pen_nsn = model.NewBoolVar(f'nsn_pen_{n}_{d}')
+                model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 1, 'N')] <= 1 + pen_nsn)
+                n_consecutive_penalty.append(pen_nsn)
+            else:
+                # HARD constraint for non-OC period
+                model.Add(shifts_var[(n, d, 'N')] + shifts_var[(n, d + 1, 'N')] <= 1)
+                model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 1, 'NS')] <= 1)
+                model.Add(shifts_var[(n, d, 'N')] + shifts_var[(n, d + 1, 'NS')] <= 1)
+                model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 1, 'N')] <= 1)
         
         # 2. O-N, O-NS (ควรทำงานก่อนดึก) - SOFT (ลดจุด แต่ยอมได้ถ้าจำเป็น)
         for d in range(1, days_in_month):
@@ -861,12 +886,13 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
                     separation_penalty.append(same_shift)
     
     # รวม soft constraints ทั้งหมดเข้าด้วยกัน
-    # น้ำหนัก: preferred_constraints (M fix) > separation > O→N penalty > N-O-N penalty > consecutive_off > off_after_night > oc_avoid
+    # น้ำหนัก: preferred_constraints (M fix) > separation > N→N (OC) > O→N penalty > N-O-N penalty > consecutive_off > off_after_night > oc_avoid
     model.Maximize(
         sum(preferred_constraints) * 100 + 
         sum(consecutive_off_constraints) * 5 +
         sum(off_after_night_constraints) -
         sum(separation_penalty) * 30 -  # ลบคะแนนเมื่อ ER2-ER7 ซ้อนเวรกัน
+        sum(n_consecutive_penalty) * 25 -  # ลบคะแนนเมื่อ N→N ในช่วง OC (ควรหลีกเลี่ยง)
         sum(oc_avoid_penalty) * 20 -  # ลบคะแนนเมื่อ ER4, ER8 ทำ OC
         sum(o_before_n_penalty) * 15 -  # ลบคะแนนเมื่อ O→N (ควรหลีกเลี่ยง)
         sum(n_skip_day_penalty) * 10  # ลบคะแนนเมื่อ N-O-N (ดึกสลับวัน)
@@ -901,7 +927,7 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         return None
 
 # --- UI Setup ---
-st.set_page_config(page_title="ระบบจัดตารางเวร ER_KPH v2.4", layout="wide")
+st.set_page_config(page_title="ระบบจัดตารางเวร ER_KPH v2.5", layout="wide")
 
 # --- Password Protection ---
 def check_password():
