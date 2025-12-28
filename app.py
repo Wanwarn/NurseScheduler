@@ -607,6 +607,26 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
             pen4 = model.NewBoolVar(f'ns_n_pen_{n}_{d}')
             model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 2, 'N')] <= 1 + pen4)
             n_skip_day_penalty.append(pen4)
+        
+        # 4. S-O-N, NS-O-N (ห้ามเย็น-Off-ดึก และ ดึกพิเศษ-Off-ดึก) - HARD
+        # เหตุผล: พักไม่พอ ทำเย็นแล้วหยุด 1 วัน แล้วมาดึก = เหนื่อยมาก
+        for d in range(1, days_in_month - 1):
+            # S-O-N: ห้ามทำ S วันที่ d แล้ว Off d+1 แล้ว N วันที่ d+2
+            model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'O')] + shifts_var[(n, d + 2, 'N')] <= 2)
+            # S-O-NS: ห้ามทำ S วันที่ d แล้ว Off d+1 แล้ว NS วันที่ d+2
+            model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'O')] + shifts_var[(n, d + 2, 'NS')] <= 2)
+            # NS-O-N: ห้ามทำ NS วันที่ d แล้ว Off d+1 แล้ว N วันที่ d+2
+            model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 1, 'O')] + shifts_var[(n, d + 2, 'N')] <= 2)
+            # NS-O-NS: ห้ามทำ NS วันที่ d แล้ว Off d+1 แล้ว NS วันที่ d+2
+            model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 1, 'O')] + shifts_var[(n, d + 2, 'NS')] <= 2)
+        
+        # 5. S-S-N, S-S-NS (ห้ามเย็น-เย็น-ดึก) - HARD
+        # เหตุผล: ทำบ่าย 2 วันติด แล้วมาดึก = ไม่เหมาะสม
+        for d in range(1, days_in_month - 1):
+            # S-S-N: ห้ามทำ S วันที่ d แล้ว S วันที่ d+1 แล้ว N วันที่ d+2
+            model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'S')] + shifts_var[(n, d + 2, 'N')] <= 2)
+            # S-S-NS: ห้ามทำ S วันที่ d แล้ว S วันที่ d+1 แล้ว NS วันที่ d+2
+            model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'S')] + shifts_var[(n, d + 2, 'NS')] <= 2)
 
     # ==========================================
     # กฎเวร NS (บ่าย+ดึก 16 ชม.) - OT Shift (ลดความซับซ้อน)
