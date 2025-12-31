@@ -727,7 +727,8 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         req_year = req.get('year', year)
         
         if req_month == month and req_year == year: # ต้องตรงกันเป๊ะๆ ถึงจะเอามาคิด
-           if req['nurse'] in nurses:
+           # เพิ่ม .get() และเช็คว่ามี key หรือไม่
+            if req.get('nurse') and req['nurse'] in nurses:
                 if req['type'] == 'Off':
                     # SOFT: พยายามให้หยุดตามขอ แต่ถ้าคนไม่พอ อาจจัดเวรให้แทน
                     # น้ำหนักตามลำดับ: priority 1 = 10 repeats, priority 2 = 9, ... priority 10 = 1
