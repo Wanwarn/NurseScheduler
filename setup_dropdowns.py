@@ -9,8 +9,19 @@ creds = ServiceAccountCredentials.from_json_keyfile_name('service_account.json',
 client = gspread.authorize(creds)
 sheet = client.open_by_url(SHEET_URL)
 
-# Define dropdown values
-NURSES = ['ER1', 'ER2', 'ER3', 'ER4', 'ER5', 'ER6', 'ER7', 'ER8', 'ER9', 'ER10']
+# Define dropdown values with real names
+NURSES = [
+    'ER1 (นูรีซาน)',
+    'ER2 (อัมรี)',
+    'ER3 (ฮาบีบูเลาะ)',
+    'ER4 (มัรวาน)',
+    'ER5 (อานูรา)',
+    'ER6 (อูไมซะห์)',
+    'ER7 (นูรีฮัน)',
+    'ER8 (ฮูสนี)',
+    'ER9 (นูซีลัน)',
+    'ER10 (ซัมนะห์)'
+]
 LEAVE_TYPES = ['Off', 'Leave', 'Train']  # แยก Leave (ลา) และ Train (ประชุม/อบรม)
 SHIFTS = ['M', 'S', 'N']
 
@@ -50,8 +61,8 @@ except:
 
 # Add headers
 current_data = ws_leave.get_all_values()
-if not current_data or (len(current_data) > 0 and current_data[0][0] == ''):
-    ws_leave.update(values=[['nurse', 'date', 'month', 'year', 'type', 'priority']], range_name='A1:F1')
+if not current_data or len(current_data[0]) == 0 or current_data[0][0] == '':
+    ws_leave.update(values=[['nurse', 'date', 'month', 'year', 'type', 'priority', 'timestamp']], range_name='A1:G1')
 
 set_dropdown(ws_leave, 'A2:A100', NURSES)
 set_dropdown(ws_leave, 'E2:E100', LEAVE_TYPES)
@@ -67,8 +78,8 @@ except:
     ws_fix = sheet.add_worksheet(title='FixRequests', rows=100, cols=10)
 
 current_data = ws_fix.get_all_values()
-if not current_data or (len(current_data) > 0 and current_data[0][0] == ''):
-    ws_fix.update(values=[['nurse', 'shift', 'dates', 'month', 'year']], range_name='A1:E1')
+if not current_data or len(current_data[0]) == 0 or current_data[0][0] == '':
+    ws_fix.update(values=[['nurse', 'shift', 'dates', 'month', 'year', 'timestamp']], range_name='A1:F1')
 
 set_dropdown(ws_fix, 'A2:A100', NURSES)
 set_dropdown(ws_fix, 'B2:B100', SHIFTS)
@@ -84,8 +95,8 @@ except:
     ws_staff = sheet.add_worksheet(title='StaffingOverrides', rows=100, cols=10)
 
 current_data = ws_staff.get_all_values()
-if not current_data or (len(current_data) > 0 and current_data[0][0] == ''):
-    ws_staff.update(values=[['start', 'end', 'shift', 'count', 'month', 'year']], range_name='A1:F1')
+if not current_data or len(current_data[0]) == 0 or current_data[0][0] == '':
+    ws_staff.update(values=[['start', 'end', 'shift', 'count', 'month', 'year', 'timestamp']], range_name='A1:G1')
 
 set_dropdown(ws_staff, 'C2:C100', SHIFTS)
 print('[OK] StaffingOverrides - shift dropdown added')

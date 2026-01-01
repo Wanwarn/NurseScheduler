@@ -51,18 +51,18 @@ def get_holiday_name(year, month, day):
     }
     return holiday_names.get((year, month, day), "วันหยุดราชการ")
 
-# --- Nurse Names Mapping (Anonymized for Public Sharing) ---
+# --- Nurse Names Mapping ---
 NURSE_NAMES = {
-    'ER1': 'Nurse 1',
-    'ER2': 'Nurse 2',
-    'ER3': 'Nurse 3',
-    'ER4': 'Nurse 4',
-    'ER5': 'Nurse 5',
-    'ER6': 'Nurse 6',
-    'ER7': 'Nurse 7',
-    'ER8': 'Nurse 8',
-    'ER9': 'Nurse 9',
-    'ER10': 'Nurse 10',
+    'ER1': 'นูรีซาน',
+    'ER2': 'อัมรี',
+    'ER3': 'ฮาบีบูเลาะ',
+    'ER4': 'มัรวาน',
+    'ER5': 'อานูรา',
+    'ER6': 'อูไมซะห์',
+    'ER7': 'นูรีฮัน',
+    'ER8': 'ฮูสนี',
+    'ER9': 'นูซีลัน',
+    'ER10': 'ซัมนะห์',
 }
 
 # ==========================================
@@ -87,25 +87,97 @@ def connect_gsheet():
         st.error(f"❌ เชื่อมต่อ Google Sheets ไม่สำเร็จ: {e}")
         return None
 
+# --- Helper: แปลงชื่อจาก dropdown กลับเป็นรหัส ER ---
+def extract_nurse_id(nurse_value):
+    """แปลง 'ER1 (นูรีซาน)' -> 'ER1' หรือ 'นูรีซาน' -> 'ER1'"""
+    if not nurse_value:
+        return None
+    
+    nurse_str = str(nurse_value).strip()
+    
+    # กรณี 1: รูปแบบ "ER1 (ชื่อ)" -> ดึง ER1 ออกมา
+    if nurse_str.startswith('ER') and '(' in nurse_str:
+        return nurse_str.split('(')[0].strip()
+    
+    # กรณี 2: รูปแบบ "ER1" หรือ "ER10" โดยตรง
+    if nurse_str.startswith('ER') and nurse_str[2:].replace('0', '').isdigit():
+        return nurse_str
+    
+    # กรณี 3: ชื่อจริงโดยตรง -> หา mapping กลับ
+    for er_id, name in NURSE_NAMES.items():
+        if name in nurse_str or nurse_str in name:
+            return er_id
+    
+    # กรณี 4: คืนค่าเดิม (อาจเป็น ER1-ER10 อยู่แล้ว)
+    return nurse_str
+
 # --- Leave Requests ---
 def load_requests_from_gsheet():
     try:
         sh = connect_gsheet()
         if not sh: return []
-        return sh.worksheet("LeaveRequests").get_all_records()
+        records = sh.worksheet("LeaveRequests").get_all_records()
+        
+        from datetime import datetime
+        sync_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # แปลงชื่อ nurse กลับเป็นรหัส ER และเพิ่ม timestamp ถ้าไม่มี
+        for r in records:
+            r['nurse'] = extract_nurse_id(r.get('nurse'))
+            # ถ้า timestamp ว่างหรือไม่มี ให้ใส่เวลาที่ดึงข้อมูล
+            if not r.get('timestamp'):
+                r['timestamp'] = f"(synced: {sync_time})"
+        return records
     except: return []
 
 def save_requests_to_gsheet():
+    """บันทึกข้อมูลจาก session_state ไปยัง Google Sheet (รวมกับข้อมูลเดิม)"""
     try:
         sh = connect_gsheet()
         if not sh: return
         ws = sh.worksheet("LeaveRequests")
-        ws.clear()
-        if st.session_state.requests:
-            ws.update([list(st.session_state.requests[0].keys())] + [list(d.values()) for d in st.session_state.requests])
+        
+        # Header ที่ถูกต้อง (พร้อม timestamp)
+        headers = ['nurse', 'date', 'month', 'year', 'type', 'priority', 'timestamp']
+        
+        # 1. อ่านข้อมูลเดิมจาก Google Sheet
+        existing_records = ws.get_all_records()
+        
+        # 2. สร้าง set ของข้อมูลที่มีอยู่แล้ว (nurse, date, month, year) เพื่อเช็ค duplicate
+        existing_keys = set()
+        for r in existing_records:
+            key = (str(r.get('nurse', '')), str(r.get('date', '')), str(r.get('month', '')), str(r.get('year', '')))
+            existing_keys.add(key)
+        
+        # 3. หาข้อมูลใหม่ที่ยังไม่มีใน Sheet
+        new_records = []
+        for req in st.session_state.requests:
+            key = (str(req.get('nurse', '')), str(req.get('date', '')), str(req.get('month', '')), str(req.get('year', '')))
+            if key not in existing_keys:
+                new_records.append(req)
+                existing_keys.add(key)  # ป้องกัน duplicate ในรอบเดียวกัน
+        
+        # 4. ถ้ามีข้อมูลใหม่ ให้ append ต่อท้าย
+        if new_records:
+            next_row = len(existing_records) + 2  # +1 for header, +1 for 0-index
+            data = []
+            for req in new_records:
+                row = [
+                    req.get('nurse', ''),
+                    req.get('date', ''),
+                    req.get('month', ''),
+                    req.get('year', ''),
+                    req.get('type', ''),
+                    req.get('priority', ''),
+                    req.get('timestamp', '')
+                ]
+                data.append(row)
+            ws.update(values=data, range_name=f'A{next_row}')
+            st.success(f"✅ เพิ่มข้อมูลใหม่ {len(new_records)} รายการ ต่อท้าย Google Sheet")
         else:
-            ws.update([['nurse', 'date', 'month', 'year', 'type', 'reason', 'priority']])
-    except Exception as e: st.error(f"Error: {e}")
+            st.info("ℹ️ ไม่มีข้อมูลใหม่ที่ต้องบันทึก (ข้อมูลทั้งหมดมีอยู่แล้วใน Sheet)")
+            
+    except Exception as e: st.error(f"Error saving requests: {e}")
 
 # --- Fix Requests ---
 def load_fix_requests_from_gsheet():
@@ -113,30 +185,63 @@ def load_fix_requests_from_gsheet():
         sh = connect_gsheet()
         if not sh: return []
         records = sh.worksheet("FixRequests").get_all_records()
+        
+        from datetime import datetime
+        sync_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
         for r in records:
+            # แปลงชื่อ nurse กลับเป็นรหัส ER
+            r['nurse'] = extract_nurse_id(r.get('nurse'))
             if isinstance(r.get('dates'), str) and r['dates']:
                 r['dates'] = [int(x) for x in r['dates'].split(',')]
             elif isinstance(r.get('dates'), int):
                 r['dates'] = [r['dates']]
+            # ถ้า timestamp ว่างหรือไม่มี ให้ใส่เวลาที่ดึงข้อมูล
+            if not r.get('timestamp'):
+                r['timestamp'] = f"(synced: {sync_time})"
         return records
     except: return []
 
 def save_fix_requests_to_gsheet():
+    """บันทึกข้อมูลจาก session_state ไปยัง Google Sheet (รวมกับข้อมูลเดิม)"""
     try:
         sh = connect_gsheet()
         if not sh: return
         ws = sh.worksheet("FixRequests")
-        ws.clear()
-        if st.session_state.fix_requests:
+        
+        headers = ['nurse', 'shift', 'dates', 'month', 'year', 'timestamp']
+        
+        # 1. อ่านข้อมูลเดิมจาก Google Sheet
+        existing_records = ws.get_all_records()
+        
+        # 2. สร้าง set ของข้อมูลที่มีอยู่แล้ว
+        existing_keys = set()
+        for r in existing_records:
+            key = (str(r.get('nurse', '')), str(r.get('shift', '')), str(r.get('dates', '')), str(r.get('month', '')), str(r.get('year', '')))
+            existing_keys.add(key)
+        
+        # 3. หาข้อมูลใหม่
+        new_records = []
+        for item in st.session_state.fix_requests:
+            dates_str = ",".join(map(str, item.get('dates', []))) if isinstance(item.get('dates'), list) else str(item.get('dates', ''))
+            key = (str(item.get('nurse', '')), str(item.get('shift', '')), dates_str, str(item.get('month', '')), str(item.get('year', '')))
+            if key not in existing_keys:
+                new_records.append(item)
+                existing_keys.add(key)
+        
+        # 4. Append ต่อท้าย
+        if new_records:
+            next_row = len(existing_records) + 2
             data = []
-            for item in st.session_state.fix_requests:
-                row = item.copy()
-                if isinstance(row['dates'], list): row['dates'] = ",".join(map(str, row['dates']))
+            for item in new_records:
+                dates_str = ",".join(map(str, item.get('dates', []))) if isinstance(item.get('dates'), list) else str(item.get('dates', ''))
+                row = [item.get('nurse', ''), item.get('shift', ''), dates_str, item.get('month', ''), item.get('year', ''), item.get('timestamp', '')]
                 data.append(row)
-            ws.update([list(data[0].keys())] + [list(d.values()) for d in data])
+            ws.update(values=data, range_name=f'A{next_row}')
+            st.success(f"✅ เพิ่ม Fix Request ใหม่ {len(new_records)} รายการ")
         else:
-            ws.update([['nurse', 'shift', 'dates', 'month', 'year']])
-    except Exception as e: st.error(f"Error: {e}")
+            st.info("ℹ️ ไม่มี Fix Request ใหม่ที่ต้องบันทึก")
+    except Exception as e: st.error(f"Error saving fix requests: {e}")
 
 # --- Staffing Overrides ---
 def load_staffing_overrides_from_gsheet():
@@ -151,12 +256,38 @@ def save_staffing_overrides_to_gsheet():
         sh = connect_gsheet()
         if not sh: return
         ws = sh.worksheet("StaffingOverrides")
-        ws.clear()
-        if st.session_state.staffing_overrides:
-            ws.update([list(st.session_state.staffing_overrides[0].keys())] + [list(d.values()) for d in st.session_state.staffing_overrides])
+        
+        headers = ['start', 'end', 'shift', 'count', 'month', 'year', 'timestamp']
+        
+        # 1. อ่านข้อมูลเดิม
+        existing_records = ws.get_all_records()
+        
+        # 2. สร้าง set ของข้อมูลที่มีอยู่
+        existing_keys = set()
+        for r in existing_records:
+            key = (str(r.get('start', '')), str(r.get('end', '')), str(r.get('shift', '')), str(r.get('month', '')), str(r.get('year', '')))
+            existing_keys.add(key)
+        
+        # 3. หาข้อมูลใหม่
+        new_records = []
+        for item in st.session_state.staffing_overrides:
+            key = (str(item.get('start', '')), str(item.get('end', '')), str(item.get('shift', '')), str(item.get('month', '')), str(item.get('year', '')))
+            if key not in existing_keys:
+                new_records.append(item)
+                existing_keys.add(key)
+        
+        # 4. Append ต่อท้าย
+        if new_records:
+            next_row = len(existing_records) + 2
+            data = []
+            for item in new_records:
+                row = [item.get('start', ''), item.get('end', ''), item.get('shift', ''), item.get('count', ''), item.get('month', ''), item.get('year', ''), item.get('timestamp', '')]
+                data.append(row)
+            ws.update(values=data, range_name=f'A{next_row}')
+            st.success(f"✅ เพิ่ม Staffing Override ใหม่ {len(new_records)} รายการ")
         else:
-            ws.update([['start', 'end', 'shift', 'count', 'month', 'year']])
-    except Exception as e: st.error(f"Error: {e}")
+            st.info("ℹ️ ไม่มี Staffing Override ใหม่ที่ต้องบันทึก")
+    except Exception as e: st.error(f"Error saving staffing overrides: {e}")
 
 # --- Helper Function ---
 def get_week_occurrence(day):
@@ -463,6 +594,29 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
                     )
 
     # ==========================================
+    # 🎯 คำนวณเป้าหมายวันทำการ (Auto Calculate Work Days)
+    # ==========================================
+    
+    # 1. นับวันหยุด "เสาร์-อาทิตย์"
+    weekends = 0
+    for d in range(1, days_in_month + 1):
+        if calendar.weekday(year, month, d) >= 5:  # 5=เสาร์, 6=อาทิตย์
+            weekends += 1
+            
+    # 2. นับวันหยุด "นักขัตฤกษ์" (เฉพาะที่ตรงกับ จันทร์-ศุกร์)
+    holidays_weekday = 0
+    holiday_list = THAI_HOLIDAYS.get(year, {}).get(month, [])
+    for d in holiday_list:
+        if calendar.weekday(year, month, d) < 5:  # เฉพาะ จ-ศ
+            holidays_weekday += 1
+            
+    # 3. สรุปเป้าหมายวันทำงานปกติ (Target)
+    target_work_days = days_in_month - (weekends + holidays_weekday)
+    
+    # แสดงค่าใน Terminal เพื่อเช็คความถูกต้อง
+    print(f"[TARGET] Month {month}/{year}: {days_in_month} days, holidays {weekends+holidays_weekday}, target work = {target_work_days} days")
+    
+    # ==========================================
     # 1. กฎพื้นฐานและกำลังคน (Hard Constraints)
     # ==========================================
     for d in range(1, days_in_month + 1):
@@ -513,6 +667,20 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
             # ถ้า S วันที่ d และ M วันที่ d+1 → ห้าม N วันที่ d+2
             model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'M')] + shifts_var[(n, d + 2, 'N')] <= 2)
             model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'M')] + shifts_var[(n, d + 2, 'NS')] <= 2)
+    
+    # S -> O -> N (บ่าย -> หยุด -> ดึก = เสียวันหยุดฟรี) - SOFT CONSTRAINT
+    # เหตุผล: S เลิกเที่ยงคืน, O ไม่ได้พักจริง, N ต้องมาเที่ยงคืน
+    s_o_n_penalty = []
+    for n in nurses:
+        for d in range(1, days_in_month - 1):
+            # สร้าง penalty แทน hard constraint
+            pen1 = model.NewBoolVar(f'son_pen_{n}_{d}')
+            model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'O')] + shifts_var[(n, d + 2, 'N')] <= 2 + pen1)
+            s_o_n_penalty.append(pen1)
+            
+            pen2 = model.NewBoolVar(f'sons_pen_{n}_{d}')
+            model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'O')] + shifts_var[(n, d + 2, 'NS')] <= 2 + pen2)
+            s_o_n_penalty.append(pen2)
 
     # ==========================================
     # กฎเวรดึก (N) เดี่ยว - ต้องทำงานก่อนดึก และหยุดหลังดึก
@@ -579,12 +747,40 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
     for d in range(1, days_in_month + 1):
         model.Add(shifts_var[('ER1', d, 'NS')] == 0)
         model.Add(shifts_var[('ER7', d, 'NS')] == 0)
+    
+    # ==========================================
+    # กระจาย NS เท่าเทียม แต่ลดให้น้อยที่สุด (NS = ทางเลือกสุดท้าย)
+    # ==========================================
+    # NS เป็น optional ไม่บังคับ แต่ถ้าต้องใช้ให้กระจายเท่าๆ กัน
+    
+    for n in nurses_for_ns:
+        ns_total = sum(shifts_var[(n, d, 'NS')] for d in range(1, days_in_month + 1))
+        # ไม่บังคับขั้นต่ำ แต่จำกัดสูงสุด 2 เวร/เดือน (ลดลงจาก 3)
+        model.Add(ns_total <= 2)  # สูงสุด 2 เวร NS/เดือน
 
-    # ทำงานต่อเนื่องสูงสุด 7 วัน ใน 8 วัน (รวม NS + ข้ามเดือน)
+    # ==========================================
+    # ทำงานต่อเนื่อง: ห้ามเกิน 6 วันติด (HARD), ยอมให้ 7 วันถ้าจำเป็น (SOFT)
+    # ==========================================
+    seven_day_streak_penalty = []
+    
     for n in nurses:
-        # กรณีปกติ: ใช้เฉพาะข้อมูลเดือนนี้
-        for d in range(1, days_in_month - 6):
+        # กรณีปกติ: ตรวจสอบทุกช่วง 8 วันติดต่อกัน
+        for d in range(1, days_in_month - 6):  # d ถึง d+7 (8 วัน)
+            # HARD: ห้ามเกิน 7 วันทำงานใน 8 วันติดต่อกัน
             model.Add(sum(sum(shifts_var[(n, d + k, s)] for s in work_shifts) for k in range(8)) <= 7)
+        
+        # เพิ่ม constraint สำหรับวันท้ายเดือน (เช็คย้อนหลัง)
+        for d in range(8, days_in_month + 1):
+            # ตรวจสอบ 8 วันย้อนหลัง (d-7 ถึง d)
+            model.Add(sum(sum(shifts_var[(n, d - k, s)] for s in work_shifts) for k in range(8)) <= 7)
+        
+        # SOFT: prefer ไม่เกิน 6 วันติด
+        for d in range(1, days_in_month - 5):  # d ถึง d+6 (7 วัน)
+            work_in_7_days = sum(sum(shifts_var[(n, d + k, s)] for s in work_shifts) for k in range(7))
+            is_7_day_streak = model.NewBoolVar(f'7day_streak_{n}_{d}')
+            model.Add(work_in_7_days <= 6 + is_7_day_streak)
+            model.Add(work_in_7_days >= 7 * is_7_day_streak)
+            seven_day_streak_penalty.append(is_7_day_streak)
         
         # กรณีข้ามเดือน: วันที่ 1-7 ต้องรวมข้อมูลจากเดือนก่อน
         if prev_month_data and n in prev_month_data:
@@ -695,10 +891,14 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         er7_sn_shifts.append(shifts_var[('ER7', d, 'S')])
         er7_sn_shifts.append(shifts_var[('ER7', d, 'N')])
 
-    # ER7 (Relaxed): เช้า+ลา ไม่เกิน 10 (รวมวันลา/ประชุมด้วย), บ่าย+ดึก ไม่เกิน 10
+    # ER7 (Contract - RELAXED): 
+    # - เช้า+ลา/อบรม ≈ 10 เวร (ตามสัญญา ±1)
+    # - บ่าย+ดึก ≈ 10 เวร (ตามสัญญา ±1)
     er7_lt_shifts = [shifts_var[('ER7', d, 'L_T')] for d in range(1, days_in_month + 1)]
-    model.Add(sum(er7_m_shifts) + sum(er7_lt_shifts) <= 10)  # M + ลา/ประชุม <= 10 (RELAXED)
-    model.Add(sum(er7_sn_shifts) <= 10)  # S+N ไม่เกิน 10
+    model.Add(sum(er7_m_shifts) + sum(er7_lt_shifts) >= 9)   # M + ลา/ประชุม >= 9
+    model.Add(sum(er7_m_shifts) + sum(er7_lt_shifts) <= 11)  # M + ลา/ประชุม <= 11
+    model.Add(sum(er7_sn_shifts) >= 9)   # S+N >= 9
+    model.Add(sum(er7_sn_shifts) <= 11)  # S+N <= 11
     
     # ER7 ดึก (N) สูงสุด 4 เวร/เดือน
     er7_n_shifts = [shifts_var[('ER7', d, 'N')] for d in range(1, days_in_month + 1)]
@@ -757,10 +957,21 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
     nurses_for_sn_fairness = [n for n in nurses if n not in ['ER1']]
     
     total_work_per_nurse = {}
+    work_days_diff = []  # เก็บค่าความต่างจากเป้าหมาย
     
     for n in rotating_nurses:
-        # นับรวม M, S, N, L_T
-        total_work_per_nurse[n] = sum(sum(shifts_var[(n, d, s)] for s in work_shifts) for d in range(1, days_in_month + 1))
+        # นับรวม M, S, N, L_T (ไม่รวม NS เพราะ NS นับเป็น OT)
+        total_work_per_nurse[n] = sum(sum(shifts_var[(n, d, s)] for s in ['M', 'S', 'N', 'L_T']) for d in range(1, days_in_month + 1))
+        
+        # Constraint: ให้วันทำงานใกล้เคียงเป้าหมาย (±2) - RELAXED
+        # ใช้ target_work_days ที่คำนวณไว้ข้างบนแล้ว
+        model.Add(total_work_per_nurse[n] >= target_work_days - 2)
+        model.Add(total_work_per_nurse[n] <= target_work_days + 2)
+        
+        # สร้างตัวแปร Diff: |จำนวนวันที่ทำ - เป้าหมายเดือนนี้|
+        diff = model.NewIntVar(0, days_in_month, f'diff_work_{n}')
+        model.AddAbsEquality(diff, total_work_per_nurse[n] - target_work_days)
+        work_days_diff.append(diff)
 
     # กฎบังคับ: เวรรวมห้ามต่างกันเกิน 1 (เพื่อความแฟร์สูงสุด)
     for n1 in rotating_nurses:
@@ -769,13 +980,31 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
             model.Add(total_work_per_nurse[n1] - total_work_per_nurse[n2] <= 1)
     
     # ==========================================
+    # 3.0.1 NS Penalty: ทำให้ NS เป็นทางเลือกสุดท้าย
+    # ==========================================
+    ns_penalty = []
+    for n in nurses_for_ns:
+        for d in range(1, days_in_month + 1):
+            ns_penalty.append(shifts_var[(n, d, 'NS')])
+    
+    # ==========================================
+    # 3.0.2 Prefer เวรเช้าวันหยุด (แทน NS)
+    # ==========================================
+    # Prefer เวรเช้าวันหยุด (ส-อา, นักขัตฤกษ์) เพื่อเติมให้ครบเป้า แทนที่จะใช้ NS
+    holiday_morning_bonus = []
+    weekend_days = [d for d in range(1, days_in_month + 1) if calendar.weekday(year, month, d) >= 5]
+    holiday_days = THAI_HOLIDAYS.get(year, {}).get(month, [])
+    special_days = list(set(weekend_days + holiday_days))
+    
+    for n in rotating_nurses:
+        for d in special_days:
+            # ให้คะแนนบวกสำหรับ M ในวันหยุด (ทดแทน NS)
+            holiday_morning_bonus.append(shifts_var[(n, d, 'M')])
+    
+    # ==========================================
     # 3.1 วันหยุดของแต่ละคน = วันหยุดของเดือน (เสาร์-อาทิตย์ + นักขัตฤกษ์)
     # ==========================================
-    # คำนวณจำนวนวันหยุดในเดือน
-    weekend_count = sum(1 for d in range(1, days_in_month + 1) if calendar.weekday(year, month, d) >= 5)
-    holiday_count = len([d for d in THAI_HOLIDAYS.get(year, {}).get(month, []) 
-                        if calendar.weekday(year, month, d) < 5])  # นับเฉพาะวันหยุดที่ไม่ตรงกับ ส-อา
-    target_off_days = weekend_count + holiday_count
+    target_off_days = weekends + holidays_weekday  # ใช้ตัวแปรที่คำนวณไว้แล้วข้างบน
     
     # กำหนดให้ทุกคน (ยกเว้น ER1) มีวันหยุดใกล้เคียงกับ target (±1)
     for n in rotating_nurses:
@@ -867,11 +1096,16 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
     model.Maximize(
         sum(preferred_constraints) * 100 + 
         sum(consecutive_off_constraints) * 5 +
-        sum(off_after_night_constraints) -
+        sum(off_after_night_constraints) +
+        sum(holiday_morning_bonus) * 25 -  # โบนัสสำหรับ M ในวันหยุด (ทดแทน NS)
         sum(separation_penalty) * 30 -  # ลบคะแนนเมื่อ ER2-ER7 ซ้อนเวรกัน
         sum(oc_avoid_penalty) * 20 -  # ลบคะแนนเมื่อ ER4, ER8 ทำ OC
         sum(o_before_n_penalty) * 15 -  # ลบคะแนนเมื่อ O→N (ควรหลีกเลี่ยง)
-        sum(n_skip_day_penalty) * 10  # ลบคะแนนเมื่อ N-O-N (ดึกสลับวัน)
+        sum(n_skip_day_penalty) * 10 -  # ลบคะแนนเมื่อ N-O-N (ดึกสลับวัน)
+        sum(ns_penalty) * 50 -  # Penalty สูงสำหรับ NS (ใช้เป็นทางเลือกสุดท้าย)
+        sum(s_o_n_penalty) * 35 -  # Penalty สำหรับ S-O-N (เสียวันหยุดฟรี)
+        sum(seven_day_streak_penalty) * 45 -  # Penalty สำหรับทำงาน 7 วันติด (prefer 6 วัน)
+        sum(work_days_diff) * 40  # Penalty สำหรับวันทำงานที่ต่างจากเป้าหมาย
     )
 
     # Solve
