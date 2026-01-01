@@ -65,97 +65,98 @@ NURSE_NAMES = {
     'ER10': 'Nurse 10',
 }
 
-CSV_FILE = "leave_requests.csv"
-FIX_REQUESTS_FILE = "fix_requests.csv"
-STAFFING_OVERRIDES_FILE = "staffing_overrides.csv"
+# ==========================================
+# ☁️ Google Sheets Integration (วางทับส่วน CSV เดิม)
+# ==========================================
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
-def load_requests_from_csv():
-    if os.path.exists(CSV_FILE):
-        try:
-            # Try cleaning up previous mess
-            df = None
-            for encoding in ['utf-8', 'cp874', 'utf-16', 'tis-620']:
-                try:
-                    df = pd.read_csv(CSV_FILE, encoding=encoding)
-                    break
-                except:
-                    continue
-            
-            if df is not None:
-                # Remove Unnamed columns
-                df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
-                # Keep only valid columns (including new 'priority' column)
-                valid_cols = ['nurse', 'date', 'month', 'year', 'type', 'reason', 'priority']
-                df = df[[c for c in df.columns if c in valid_cols]]
-                
-                # Convert numeric columns to int (handle potential floats)
-                for col in ['date', 'month', 'year', 'priority']:
-                    if col in df.columns:
-                        df[col] = df[col].fillna(0).astype(int)
-                
-                # Ensure priority column exists with default value
-                if 'priority' not in df.columns:
-                    df['priority'] = 1
-                        
-                return df.to_dict('records')
-        except Exception as e:
-            print(f"Error loading {CSV_FILE}: {e}")
-            return []
-    return []
+# ตั้งค่าการเชื่อมต่อ
+SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1js5h70Abv1MIKrmZUBe3xypoCE4BXIo6_gEhBuJ5k8k/edit?usp=sharing"
+CREDENTIALS_FILE = "service_account.json"
 
-def save_requests_to_csv():
-    if st.session_state.requests:
-        df = pd.DataFrame(st.session_state.requests)
-        # Remove Unnamed columns before saving
-        df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
-        df.to_csv(CSV_FILE, index=False, encoding='utf-8')
-    else:
-        if os.path.exists(CSV_FILE):
-            os.remove(CSV_FILE)
+def connect_gsheet():
+    """เชื่อมต่อกับ Google Sheets"""
+    try:
+        creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, SCOPE)
+        client = gspread.authorize(creds)
+        sheet = client.open_by_url(SHEET_URL)
+        return sheet
+    except Exception as e:
+        st.error(f"❌ เชื่อมต่อ Google Sheets ไม่สำเร็จ: {e}")
+        return None
 
-def load_fix_requests_from_csv():
-    if os.path.exists(FIX_REQUESTS_FILE):
-        try:
-            df = pd.read_csv(FIX_REQUESTS_FILE)
-            # Check for encoding issues (if columns look weird or missing)
-            if 'dates' not in df.columns:
-                try:
-                    df = pd.read_csv(FIX_REQUESTS_FILE, encoding='utf-16')
-                except:
-                    pass
-            
-            if 'dates' in df.columns:
-                # Convert dates string back to list
-                df['dates'] = df['dates'].apply(lambda x: [int(d) for d in str(x).split(',')] if pd.notna(x) and str(x).strip() != '' else [])
-                return df.to_dict('records')
-        except Exception as e:
-            print(f"Error loading {FIX_REQUESTS_FILE}: {e}")
-            return []
-    return []
+# --- Leave Requests ---
+def load_requests_from_gsheet():
+    try:
+        sh = connect_gsheet()
+        if not sh: return []
+        return sh.worksheet("LeaveRequests").get_all_records()
+    except: return []
 
-def save_fix_requests_to_csv():
-    if st.session_state.fix_requests:
-        df = pd.DataFrame(st.session_state.fix_requests)
-        # Convert dates list to comma-separated string for CSV
-        df['dates'] = df['dates'].apply(lambda x: ','.join(map(str, x)) if x else '')
-        df.to_csv(FIX_REQUESTS_FILE, index=False)
-    else:
-        if os.path.exists(FIX_REQUESTS_FILE):
-            os.remove(FIX_REQUESTS_FILE)
+def save_requests_to_gsheet():
+    try:
+        sh = connect_gsheet()
+        if not sh: return
+        ws = sh.worksheet("LeaveRequests")
+        ws.clear()
+        if st.session_state.requests:
+            ws.update([list(st.session_state.requests[0].keys())] + [list(d.values()) for d in st.session_state.requests])
+        else:
+            ws.update([['nurse', 'date', 'month', 'year', 'type', 'reason', 'priority']])
+    except Exception as e: st.error(f"Error: {e}")
 
-def load_staffing_overrides_from_csv():
-    if os.path.exists(STAFFING_OVERRIDES_FILE):
-        df = pd.read_csv(STAFFING_OVERRIDES_FILE)
-        return df.to_dict('records')
-    return []
+# --- Fix Requests ---
+def load_fix_requests_from_gsheet():
+    try:
+        sh = connect_gsheet()
+        if not sh: return []
+        records = sh.worksheet("FixRequests").get_all_records()
+        for r in records:
+            if isinstance(r.get('dates'), str) and r['dates']:
+                r['dates'] = [int(x) for x in r['dates'].split(',')]
+            elif isinstance(r.get('dates'), int):
+                r['dates'] = [r['dates']]
+        return records
+    except: return []
 
-def save_staffing_overrides_to_csv():
-    if st.session_state.staffing_overrides:
-        df = pd.DataFrame(st.session_state.staffing_overrides)
-        df.to_csv(STAFFING_OVERRIDES_FILE, index=False)
-    else:
-        if os.path.exists(STAFFING_OVERRIDES_FILE):
-            os.remove(STAFFING_OVERRIDES_FILE)
+def save_fix_requests_to_gsheet():
+    try:
+        sh = connect_gsheet()
+        if not sh: return
+        ws = sh.worksheet("FixRequests")
+        ws.clear()
+        if st.session_state.fix_requests:
+            data = []
+            for item in st.session_state.fix_requests:
+                row = item.copy()
+                if isinstance(row['dates'], list): row['dates'] = ",".join(map(str, row['dates']))
+                data.append(row)
+            ws.update([list(data[0].keys())] + [list(d.values()) for d in data])
+        else:
+            ws.update([['nurse', 'shift', 'dates', 'month', 'year']])
+    except Exception as e: st.error(f"Error: {e}")
+
+# --- Staffing Overrides ---
+def load_staffing_overrides_from_gsheet():
+    try:
+        sh = connect_gsheet()
+        if not sh: return []
+        return sh.worksheet("StaffingOverrides").get_all_records()
+    except: return []
+
+def save_staffing_overrides_to_gsheet():
+    try:
+        sh = connect_gsheet()
+        if not sh: return
+        ws = sh.worksheet("StaffingOverrides")
+        ws.clear()
+        if st.session_state.staffing_overrides:
+            ws.update([list(st.session_state.staffing_overrides[0].keys())] + [list(d.values()) for d in st.session_state.staffing_overrides])
+        else:
+            ws.update([['start', 'end', 'shift', 'count', 'month', 'year']])
+    except Exception as e: st.error(f"Error: {e}")
 
 # --- Helper Function ---
 def get_week_occurrence(day):
@@ -736,7 +737,7 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
                     weight = max(1, 11 - priority)  # priority 1 → weight 10, priority 10 → weight 1
                     for _ in range(weight):
                         preferred_constraints.append(shifts_var[(req['nurse'], req['date'], 'O')])
-                elif req['type'] == 'Leave_Train':
+                elif req['type'] in ['Leave_Train', 'Leave', 'Train']:  # รองรับทั้งแบบเก่าและใหม่
                     model.Add(shifts_var[(req['nurse'], req['date'], 'L_T')] == 1)
                     allowed_lt.add((req['nurse'], req['date']))
     
@@ -936,11 +937,11 @@ st.caption("**v2.4** | 🆕 ผ่อนคลาย Constraints | Debug ตา�
 # Session State
 if 'schedule_df' not in st.session_state: st.session_state.schedule_df = None
 if 'requests' not in st.session_state: 
-    st.session_state.requests = load_requests_from_csv()
+    st.session_state.requests = load_requests_from_gsheet()
 if 'fix_requests' not in st.session_state:
-    st.session_state.fix_requests = load_fix_requests_from_csv()
+    st.session_state.fix_requests = load_fix_requests_from_gsheet()
 if 'staffing_overrides' not in st.session_state:
-    st.session_state.staffing_overrides = load_staffing_overrides_from_csv()
+    st.session_state.staffing_overrides = load_staffing_overrides_from_gsheet()
 
 # Sidebar
 with st.sidebar:
@@ -950,6 +951,136 @@ with st.sidebar:
     _, days_in_month = calendar.monthrange(year, month)
     nurses_list = [f'ER{i}' for i in range(1, 11)]
     
+    # ==========================================
+    # 📊 Benchmark: เป้าหมายวันหยุดพิเศษ
+    # ==========================================
+    st.markdown("---")
+    st.header("📊 เป้าหมายวันหยุด (Benchmark)")
+    
+    # คำนวณวันพิเศษทั้งหมด
+    weekend_days_list = [d for d in range(1, days_in_month + 1) if calendar.weekday(year, month, d) >= 5]
+    holiday_days_list = THAI_HOLIDAYS.get(year, {}).get(month, [])
+    special_days_set = set(weekend_days_list + holiday_days_list)
+    total_special_days = len(special_days_set)
+    
+    # จำนวนพยาบาลที่หมุนเวียน (ไม่รวม ER1)
+    rotating_count = 9  # ER2-ER10
+    
+    # เป้าหมายวันหยุดพิเศษต่อคน
+    target_special_off = total_special_days / rotating_count
+    target_special_off_int = int(target_special_off)
+    
+    # แสดง Benchmark
+    col_b1, col_b2 = st.columns(2)
+    with col_b1:
+        st.metric("🗓️ วันพิเศษในเดือน", f"{total_special_days} วัน", 
+                  help=f"ส-อา: {len(weekend_days_list)}, นักขัตฤกษ์: {len(holiday_days_list)}")
+    with col_b2:
+        st.metric("🎯 เป้าหมายหยุดพิเศษ/คน", f"~{target_special_off_int} วัน",
+                  help=f"= {total_special_days} วัน ÷ {rotating_count} คน (ไม่รวม ER1)")
+    
+    st.caption(f"💡 แต่ละคนควรได้หยุด ส-อา/นักขัตฤกษ์ ประมาณ **{target_special_off_int}-{target_special_off_int+1} วัน**")
+    
+    # ==========================================
+    # 📋 คำแนะนำ Fix Request
+    # ==========================================
+    st.markdown("---")
+    st.header("📋 คำแนะนำ Fix Request")
+    
+    # คำนวณจำนวน Fix ที่เหมาะสม
+    weeks_in_month = (days_in_month + 6) // 7  # จำนวนสัปดาห์โดยประมาณ
+    
+    # คำแนะนำ: ไม่เกิน 2-3 คนต่อสัปดาห์ขอหยุด ส-อา
+    st.info(f"""
+    **💡 คำแนะนำเพื่อป้องกัน Infeasible:**
+    
+    📅 **ขอหยุด ส-อา/นักขัตฤกษ์:**
+    - แนะนำ: ไม่เกิน **2-3 คน/สัปดาห์** ขอหยุดวัน ส-อา
+    - ทั้งเดือน: ไม่เกิน **{min(weeks_in_month * 2, total_special_days)} คำขอ** หยุดวันพิเศษ
+    
+    📝 **ลา/ประชุม (นับเป็นเวรเช้า):**
+    - แนะนำ: ไม่เกิน **2 คน/วัน** ลาพร้อมกัน
+    - ทั้งเดือน: ไม่เกิน **{days_in_month // 3} วัน** ต่อคน
+    
+    📌 **ขอ Fix เวร (M/S/N):**
+    - แนะนำ: ไม่เกิน **3 คน/สัปดาห์** ขอ Fix เวรธรรมดา
+    - ทั้งเดือน: ไม่เกิน **{weeks_in_month * 3} คำขอ** Fix เวร
+    """)
+    
+    # ตรวจสอบคำขอที่มีอยู่และแสดงคำเตือน
+    if st.session_state.requests or st.session_state.fix_requests:
+        # นับคำขอหยุดวันพิเศษ
+        special_off_requests = []
+        for req in st.session_state.requests:
+            if req.get('month') == month and req.get('year') == year:
+                if req.get('type') == 'Off' and req.get('date') in special_days_set:
+                    special_off_requests.append(req)
+        
+        # นับคำขอลา/ประชุม
+        leave_requests = []
+        leave_by_day = {}  # เก็บว่าวันไหนมีใครลาบ้าง
+        for req in st.session_state.requests:
+            if req.get('month') == month and req.get('year') == year:
+                if req.get('type') == 'Leave_Train':
+                    leave_requests.append(req)
+                    d = req.get('date')
+                    if d not in leave_by_day:
+                        leave_by_day[d] = []
+                    leave_by_day[d].append(req.get('nurse'))
+        
+        # นับคำขอ Fix เวร
+        fix_count = sum(1 for req in st.session_state.fix_requests 
+                       if req.get('month') == month and req.get('year') == year)
+        
+        # แสดงสถานะปัจจุบัน
+        st.markdown("**📊 สถานะคำขอปัจจุบัน:**")
+        
+        warning_shown = False
+        
+        # คำเตือนถ้าขอหยุดวันพิเศษเยอะ
+        if len(special_off_requests) > weeks_in_month * 2:
+            st.warning(f"⚠️ มีคำขอหยุดวัน ส-อา/นักขัตฤกษ์ **{len(special_off_requests)} คำขอ** (แนะนำไม่เกิน {weeks_in_month * 2})")
+            warning_shown = True
+            
+            # แสดงรายละเอียดว่าใครขอ
+            off_by_nurse = {}
+            for req in special_off_requests:
+                n = req.get('nurse')
+                off_by_nurse[n] = off_by_nurse.get(n, 0) + 1
+            
+            if off_by_nurse:
+                sorted_nurses = sorted(off_by_nurse.items(), key=lambda x: -x[1])
+                st.caption(f"คนที่ขอหยุดวันพิเศษ: " + ", ".join([f"{n}({c})" for n, c in sorted_nurses]))
+        
+        # คำเตือนถ้าลา/ประชุมเยอะเกินในวันเดียวกัน
+        days_with_many_leaves = [(d, nurses) for d, nurses in leave_by_day.items() if len(nurses) > 2]
+        if days_with_many_leaves:
+            for d, nurses in sorted(days_with_many_leaves):
+                st.warning(f"⚠️ วันที่ **{d}** มีคนลา/ประชุม **{len(nurses)} คน**: {', '.join(nurses)} (แนะนำไม่เกิน 2 คน/วัน)")
+            warning_shown = True
+        
+        # คำเตือนถ้ามีคนลาเยอะเกิน
+        leave_by_nurse = {}
+        for req in leave_requests:
+            n = req.get('nurse')
+            leave_by_nurse[n] = leave_by_nurse.get(n, 0) + 1
+        
+        max_leave_per_person = days_in_month // 3
+        nurses_with_many_leaves = [(n, c) for n, c in leave_by_nurse.items() if c > max_leave_per_person]
+        if nurses_with_many_leaves:
+            for n, c in sorted(nurses_with_many_leaves, key=lambda x: -x[1]):
+                st.warning(f"⚠️ **{n}** ลา/ประชุม **{c} วัน** (แนะนำไม่เกิน {max_leave_per_person} วัน/คน)")
+            warning_shown = True
+        
+        # คำเตือนถ้า Fix เวรเยอะ
+        if fix_count > weeks_in_month * 3:
+            st.warning(f"⚠️ มีคำขอ Fix เวร **{fix_count} คำขอ** (แนะนำไม่เกิน {weeks_in_month * 3})")
+            warning_shown = True
+        
+        if not warning_shown:
+            leave_count = len(leave_requests)
+            st.success(f"✅ หยุดวันพิเศษ: {len(special_off_requests)}/{weeks_in_month * 2} | ลา/ประชุม: {leave_count} | Fix: {fix_count}/{weeks_in_month * 3}")
+    
     st.markdown("---")
     st.header("📞 เวร On-Call (OC)")
     enable_oc = st.checkbox("เปิดใช้งานเวร On-Call (วันที่ 1-10)", value=False, 
@@ -957,13 +1088,13 @@ with st.sidebar:
     
     st.markdown("---")
     st.header("📂 ตารางเดือนก่อน")
-    st.caption("Upload ไฟล์ CSV ตารางเดือนก่อน เพื่อใช้กฎข้ามเดือน (N→M, S→N)")
+    st.caption("Upload ไฟล์ gsheet ตารางเดือนก่อน เพื่อใช้กฎข้ามเดือน (N→M, S→N)")
     
-    tab_upload, tab_manual = st.tabs(["📂 Upload CSV", "✍️ Manual Entry"])
+    tab_upload, tab_manual = st.tabs(["📂 Upload gsheet", "✍️ Manual Entry"])
     prev_month_data = None
 
     with tab_upload:
-        prev_month_file = st.file_uploader("เลือกไฟล์ CSV", type=['csv'], key="prev_month_upload")
+        prev_month_file = st.file_uploader("เลือกไฟล์ gsheet", type=['gsheet'], key="prev_month_upload")
         
         if prev_month_file is not None:
             prev_month_data = parse_previous_month_schedule(prev_month_file, nurses_list)
@@ -1020,40 +1151,126 @@ with st.sidebar:
             st.info(f"ใช้ข้อมูล Manual Entry สำหรับ {len(prev_month_data)} พยาบาล")
     
     st.markdown("---")
-    st.header("📝 บันทึกวันลา")
+    st.header("☁️ ดึงข้อมูลจาก Google Sheet")
+    st.caption("👥 User กรอกข้อมูลใน Google Sheet โดยตรง → 🔄 Admin กดปุ่มดึงข้อมูล")
+    
+    # แสดง link ไปยัง Google Sheet
+    st.markdown(f"📎 [เปิด Google Sheet]({SHEET_URL})")
+    
+    col_sync1, col_sync2 = st.columns(2)
+    
+    with col_sync1:
+        if st.button("🔄 ดึงข้อมูลจาก Google Sheet", type="primary"):
+            with st.spinner("กำลังดึงข้อมูล..."):
+                try:
+                    # โหลดข้อมูลใหม่จาก Google Sheet
+                    new_requests = load_requests_from_gsheet()
+                    new_fix_requests = load_fix_requests_from_gsheet()
+                    new_staffing = load_staffing_overrides_from_gsheet()
+                    
+                    st.session_state.requests = new_requests
+                    st.session_state.fix_requests = new_fix_requests
+                    st.session_state.staffing_overrides = new_staffing
+                    
+                    st.success(f"✅ ดึงข้อมูลสำเร็จ! วันลา: {len(new_requests)}, Fix: {len(new_fix_requests)}, กำลังคน: {len(new_staffing)}")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ เกิดข้อผิดพลาด: {e}")
+    
+    with col_sync2:
+        if st.button("📤 บันทึกไปยัง Google Sheet"):
+            with st.spinner("กำลังบันทึก..."):
+                try:
+                    save_requests_to_gsheet()
+                    save_fix_requests_to_gsheet()
+                    save_staffing_overrides_to_gsheet()
+                    st.success("✅ บันทึกสำเร็จ!")
+                except Exception as e:
+                    st.error(f"❌ เกิดข้อผิดพลาด: {e}")
+    
+    # แสดงคำแนะนำรูปแบบข้อมูลใน Google Sheet
+    with st.expander("📋 รูปแบบข้อมูลใน Google Sheet"):
+        st.markdown("""
+        **Sheet: LeaveRequests**
+        | nurse | date | month | year | type | priority |
+        |-------|------|-------|------|------|----------|
+        | ER2 | 5 | 1 | 2026 | Off | 1 |
+        | ER3 | 10 | 1 | 2026 | Leave_Train | 1 |
+        
+        - `type`: `Off` = ขอหยุด, `Leave_Train` = ลา/ประชุม
+        - `priority`: 1 = สำคัญมาก, 10 = สำคัญน้อย
+        
+        ---
+        
+        **Sheet: FixRequests**
+        | nurse | shift | dates | month | year |
+        |-------|-------|-------|-------|------|
+        | ER5 | M | 1,8,15,22 | 1 | 2026 |
+        | ER9 | N | 3,10 | 1 | 2026 |
+        
+        - `shift`: `M` = เช้า, `S` = บ่าย, `N` = ดึก
+        - `dates`: วันที่ คั่นด้วยจุลภาค (comma)
+        
+        ---
+        
+        **Sheet: StaffingOverrides**
+        | start | end | shift | count | month | year |
+        |-------|-----|-------|-------|-------|------|
+        | 1 | 10 | N | 2 | 1 | 2026 |
+        
+        - `shift`: `N` = ดึก, `S` = บ่าย
+        - `count`: จำนวนคนที่ต้องการ
+        """)
+    
+    st.markdown("---")
+    st.header("📝 บันทึกวันลา (ผ่าน App)")
     
     with st.form("req_form", clear_on_submit=True):
         r_nurse = st.selectbox("ชื่อพยาบาล", nurses_list)
-        r_type = st.radio("ประเภท", ["ขอหยุด (Off)", "ลา/ประชุม (นับงาน)"])
+        r_type = st.radio("ประเภท", ["ขอหยุด (Off)", "ลา (Leave)", "ประชุม/อบรม (Train)"], horizontal=True)
         r_dates = st.multiselect("เลือกวันที่", range(1, days_in_month + 1))
         r_priority = st.number_input("ลำดับความสำคัญ (1=สำคัญมาก, 10=สำคัญน้อย)", min_value=1, max_value=10, value=1, 
                                       help="ถ้าคนไม่พอ ลำดับเลขน้อยจะได้หยุดก่อน")
         
         # แก้ไขส่วนบันทึกข้อมูล (เพิ่ม month และ year)
         if st.form_submit_button("เพิ่มรายการ") and r_dates:
-            code = 'Off' if 'ขอหยุด' in r_type else 'Leave_Train'
+            if 'ขอหยุด' in r_type:
+                code = 'Off'
+            elif 'ลา' in r_type:
+                code = 'Leave'
+            else:
+                code = 'Train'
+            
+            # สร้าง timestamp
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
             for d in r_dates:
-                # FIX: บันทึกเดือนและปีไปด้วย + priority
+                # FIX: บันทึกเดือนและปีไปด้วย + priority + timestamp
                 st.session_state.requests.append({
                     'nurse': r_nurse,
                     'date': d,
                     'month': month,
                     'year': year,
                     'type': code,
-                    'priority': r_priority
+                    'priority': r_priority,
+                    'timestamp': timestamp
                 })
-            save_requests_to_csv() 
+            save_requests_to_gsheet() 
             st.success(f"เพิ่มแล้ว! (ลำดับ {r_priority})")
 
     if st.session_state.requests:
         req_df = pd.DataFrame(st.session_state.requests)
+        # แสดง timestamp ถ้ามี
+        if 'timestamp' in req_df.columns:
+            st.caption("🕐 timestamp = วันเวลาที่คีย์ข้อมูล")
         edited_df = st.data_editor(req_df, num_rows="dynamic", key="editor")
         if edited_df is not None: st.session_state.requests = edited_df.to_dict('records')
         
         # ปุ่ม Reset ล้างรายการวันลาทั้งหมด
         if st.button("🗑️ ล้างรายการวันลาทั้งหมด", type="secondary"):
             st.session_state.requests = []
-            save_requests_to_csv()
+            save_requests_to_gsheet()
             st.rerun()
     
     # ==========================================
@@ -1101,14 +1318,20 @@ with st.sidebar:
         if st.form_submit_button("เพิ่มรายการ"):
             if selected_dates:
                 shift_code = {'เช้า (M)': 'M', 'บ่าย (S)': 'S', 'ดึก (N)': 'N'}[f_shift]
+                
+                # สร้าง timestamp
+                from datetime import datetime
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                
                 st.session_state.fix_requests.append({
                     'nurse': f_nurse,
                     'shift': shift_code,
                     'dates': selected_dates,
                     'month': month,
-                    'year': year
+                    'year': year,
+                    'timestamp': timestamp
                 })
-                save_fix_requests_to_csv()
+                save_fix_requests_to_gsheet()
                 st.success(f"✅ เพิ่มคำขอ Fix เวร {f_shift} สำหรับ {f_nurse} วันที่ {', '.join(map(str, selected_dates))} แล้ว!")
             else:
                 st.warning("⚠️ กรุณาเลือกวันที่หรือวันก่อน")
@@ -1136,12 +1359,12 @@ with st.sidebar:
                 # ลบจากท้ายไปหน้าเพื่อไม่ให้ index เลื่อน
                 for idx in sorted(indices_to_delete, reverse=True):
                     st.session_state.fix_requests.pop(idx)
-                save_fix_requests_to_csv()
+                save_fix_requests_to_gsheet()
                 st.rerun()
         with col_btn2:
             if st.button("🗑️ ล้างทั้งหมด", type="secondary"):
                 st.session_state.fix_requests = []
-                save_fix_requests_to_csv()
+                save_fix_requests_to_gsheet()
                 st.rerun()
     
     # ==========================================
@@ -1171,7 +1394,7 @@ with st.sidebar:
                 'month': month,
                 'year': year
             })
-            save_staffing_overrides_to_csv()
+            save_staffing_overrides_to_gsheet()
             st.success(f"เพิ่มกำลังคนพิเศษ: วันที่ {s_start}-{s_end} เวร {s_shift} = {s_count} คน")
     
     if st.session_state.staffing_overrides:
@@ -1189,13 +1412,122 @@ with st.sidebar:
         
         if st.button("🗑️ ล้างกำลังคนพิเศษทั้งหมด", type="secondary"):
             st.session_state.staffing_overrides = []
-            save_staffing_overrides_to_csv()
+            save_staffing_overrides_to_gsheet()
             st.rerun()
     
-    # ==========================================
-    # ปุ่มควบคุม
-    # ==========================================
     st.markdown("---")
+    
+    # ==========================================
+    # ⚠️ Pre-check Validation (ตรวจสอบก่อนจัดตาราง)
+    # ==========================================
+    st.header("⚠️ ตรวจสอบข้อมูลก่อนจัดตาราง")
+    
+    # คำนวณวันพิเศษ
+    weekend_days_check = [d for d in range(1, days_in_month + 1) if calendar.weekday(year, month, d) >= 5]
+    holiday_days_check = THAI_HOLIDAYS.get(year, {}).get(month, [])
+    special_days_check = set(weekend_days_check + holiday_days_check)
+    weeks_check = (days_in_month + 6) // 7
+    
+    issues_found = []
+    warnings_found = []
+    
+    # --- 1. ตรวจสอบวันที่ซ้ำกัน (คนเดียวกัน ขอหลายอย่างในวันเดียว) ---
+    nurse_day_requests = {}  # {(nurse, day): [types]}
+    for req in st.session_state.requests:
+        if req.get('month') == month and req.get('year') == year:
+            key = (req.get('nurse'), req.get('date'))
+            if key not in nurse_day_requests:
+                nurse_day_requests[key] = []
+            nurse_day_requests[key].append(req.get('type'))
+    
+    for req in st.session_state.fix_requests:
+        if req.get('month') == month and req.get('year') == year:
+            for d in req.get('dates', []):
+                key = (req.get('nurse'), d)
+                if key not in nurse_day_requests:
+                    nurse_day_requests[key] = []
+                nurse_day_requests[key].append(f"Fix_{req.get('shift')}")
+    
+    duplicate_days = [(k, v) for k, v in nurse_day_requests.items() if len(v) > 1]
+    if duplicate_days:
+        for (nurse, day), types in duplicate_days:
+            issues_found.append(f"🔴 **{nurse}** วันที่ {day}: มีคำขอซ้ำ ({', '.join(types)})")
+    
+    # --- 2. ตรวจสอบวันที่มีคนขอหยุดเยอะเกินไป ---
+    off_per_day = {}
+    leave_per_day = {}
+    for req in st.session_state.requests:
+        if req.get('month') == month and req.get('year') == year:
+            d = req.get('date')
+            if req.get('type') == 'Off':
+                off_per_day[d] = off_per_day.get(d, []) + [req.get('nurse')]
+            elif req.get('type') == 'Leave_Train':
+                leave_per_day[d] = leave_per_day.get(d, []) + [req.get('nurse')]
+    
+    # วันที่มีคนขอหยุด/ลารวมกันเกิน 4 คน = อาจ Infeasible
+    for d in range(1, days_in_month + 1):
+        total_unavailable = len(off_per_day.get(d, [])) + len(leave_per_day.get(d, []))
+        if total_unavailable >= 5:
+            issues_found.append(f"🔴 วันที่ {d}: มีคน **{total_unavailable} คน** ไม่ว่าง (หยุด+ลา) → อาจจัดไม่ได้!")
+        elif total_unavailable >= 4:
+            warnings_found.append(f"🟡 วันที่ {d}: มีคน {total_unavailable} คน ไม่ว่าง → ใกล้เกินโควต้า")
+    
+    # --- 3. ตรวจสอบวันพิเศษที่มีคนขอหยุดเยอะ ---
+    special_off_count = 0
+    for req in st.session_state.requests:
+        if req.get('month') == month and req.get('year') == year:
+            if req.get('type') == 'Off' and req.get('date') in special_days_check:
+                special_off_count += 1
+    
+    max_special_off = weeks_check * 2
+    if special_off_count > max_special_off * 1.5:
+        issues_found.append(f"🔴 ขอหยุดวัน ส-อา/นักขัตฤกษ์: **{special_off_count} คำขอ** (เกินโควต้ามาก, แนะนำไม่เกิน {max_special_off})")
+    elif special_off_count > max_special_off:
+        warnings_found.append(f"🟡 ขอหยุดวัน ส-อา: {special_off_count} คำขอ (เกินโควต้า {max_special_off})")
+    
+    # --- 4. ตรวจสอบ Fix Request เยอะเกิน ---
+    fix_count = sum(1 for req in st.session_state.fix_requests 
+                   if req.get('month') == month and req.get('year') == year)
+    max_fix = weeks_check * 3
+    if fix_count > max_fix * 1.5:
+        issues_found.append(f"🔴 Fix เวร: **{fix_count} คำขอ** (เกินโควต้ามาก, แนะนำไม่เกิน {max_fix})")
+    elif fix_count > max_fix:
+        warnings_found.append(f"🟡 Fix เวร: {fix_count} คำขอ (เกินโควต้า {max_fix})")
+    
+    # --- 5. ตรวจสอบคนที่ลาเยอะเกิน ---
+    leave_by_nurse = {}
+    for req in st.session_state.requests:
+        if req.get('month') == month and req.get('year') == year:
+            if req.get('type') == 'Leave_Train':
+                n = req.get('nurse')
+                leave_by_nurse[n] = leave_by_nurse.get(n, 0) + 1
+    
+    max_leave = days_in_month // 3
+    for n, count in leave_by_nurse.items():
+        if count > max_leave:
+            warnings_found.append(f"🟡 {n} ลา/ประชุม {count} วัน (เกินแนะนำ {max_leave} วัน)")
+    
+    # --- แสดงผลการตรวจสอบ ---
+    if issues_found:
+        st.error("### 🚨 พบปัญหาที่อาจทำให้จัดตารางไม่ได้")
+        for issue in issues_found:
+            st.markdown(issue)
+        
+        st.info("""
+        **💡 คำแนะนำ:**
+        - ลดจำนวนคนขอหยุด/ลาในวันที่มีปัญหา
+        - ลบคำขอที่ซ้ำซ้อน
+        - ใช้ "กำลังคนพิเศษ" เพื่อลดจำนวนเวรในวันนั้น
+        """)
+        can_proceed = False
+    elif warnings_found:
+        st.warning("### ⚠️ พบข้อควรระวัง (อาจจัดได้ แต่ควรตรวจสอบ)")
+        for warn in warnings_found:
+            st.markdown(warn)
+        can_proceed = True
+    else:
+        st.success("### ✅ ข้อมูลผ่านการตรวจสอบ พร้อมจัดตาราง!")
+        can_proceed = True
     
     # ปุ่มรีเซ็ตทุกอย่าง (ล้างวันลา + ล้างตารางเวรเก่า)
     if st.button("🔄 รีเซ็ตทั้งหมด (ล้างวันลา+ตาราง+Fix+กำลังคน)", type="secondary"):
@@ -1203,12 +1535,17 @@ with st.sidebar:
         st.session_state.fix_requests = []
         st.session_state.staffing_overrides = []
         st.session_state.schedule_df = None
-        save_requests_to_csv()
-        save_fix_requests_to_csv()
-        save_staffing_overrides_to_csv()
+        save_requests_to_gsheet()
+        save_fix_requests_to_gsheet()
+        save_staffing_overrides_to_gsheet()
         st.rerun()
 
     st.markdown("---")
+    
+    # ปุ่มประมวลผล (แสดงสถานะตาม can_proceed)
+    if issues_found:
+        st.warning("⚠️ แนะนำให้แก้ไขปัญหาก่อนจัดตาราง หรือกดปุ่มด้านล่างเพื่อลองจัดดู")
+    
     if st.button("🚀 ประมวลผลจัดตาราง", type="primary"):
         with st.spinner("กำลังคำนวณและเกลี่ยเวร..."):
             df = solve_schedule(
