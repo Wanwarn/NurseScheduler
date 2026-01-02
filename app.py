@@ -289,6 +289,161 @@ def save_staffing_overrides_to_gsheet():
             st.info("ℹ️ ไม่มี Staffing Override ใหม่ที่ต้องบันทึก")
     except Exception as e: st.error(f"Error saving staffing overrides: {e}")
 
+# --- Previous Schedule (Load/Save) ---
+def load_previous_schedule_from_gsheet(nurses):
+    """ดึงตารางเวรเดือนก่อนจาก Google Sheets (Sheet: PreviousSchedule)"""
+    try:
+        sh = connect_gsheet()
+        if not sh:
+            return None
+        
+        # ลองเปิด worksheet 'PreviousSchedule'
+        try:
+            ws = sh.worksheet("PreviousSchedule")
+        except:
+            # ถ้าไม่มี sheet → คืน None
+            return None
+        
+        # อ่านข้อมูลทั้งหมด
+        all_values = ws.get_all_values()
+        if len(all_values) < 2:  # ต้องมี header + data
+            return None
+        
+        # Row 0 = header (พยาบาล, 1, 2, 3, ..., 31)
+        header = all_values[0]
+        
+        # หา column index ที่เป็นวันที่
+        date_cols = []
+        for i, col in enumerate(header):
+            # ลบ emoji และตรวจสอบว่าเป็นตัวเลข
+            clean_col = ''.join(filter(str.isdigit, str(col)))
+            if clean_col.isdigit():
+                date_cols.append((i, int(clean_col)))
+        
+        if not date_cols:
+            return None
+        
+        # เรียงตามวันที่และเอา 7 วันสุดท้าย
+        date_cols_sorted = sorted(date_cols, key=lambda x: x[1])
+        last_7_cols = date_cols_sorted[-7:] if len(date_cols_sorted) >= 7 else date_cols_sorted
+        
+        # สร้าง dict: nurse -> list of shifts
+        prev_data = {}
+        for row in all_values[1:]:  # Skip header
+            if len(row) < 1:
+                continue
+            
+            nurse_cell = str(row[0])
+            
+            # Extract nurse ID (ER1, ER2, ..., ER10)
+            nurse_id = None
+            sorted_nurses = sorted(nurses, key=len, reverse=True)
+            for n in sorted_nurses:
+                if n in nurse_cell:
+                    nurse_id = n
+                    break
+            
+            if nurse_id and nurse_id in nurses:
+                shifts = []
+                for col_idx, day_num in last_7_cols:
+                    if col_idx < len(row):
+                        shift_val = str(row[col_idx]).strip()
+                        
+                        # แปลง shift codes
+                        if shift_val in ['M', 'เช้า']:
+                            shift = 'M'
+                        elif shift_val in ['S', 'บ่าย']:
+                            shift = 'S'
+                        elif shift_val in ['N', 'ดึก']:
+                            shift = 'N'
+                        elif shift_val in ['NS']:
+                            shift = 'NS'
+                        elif shift_val in ['NCD']:
+                            shift = 'O'  # NCD = หยุด (สำหรับ ER1)
+                        elif 'ลา' in shift_val or 'อบรม' in shift_val or 'ประชุม' in shift_val:
+                            shift = 'L_T'
+                        elif 'OC' in shift_val or '📞' in shift_val:
+                            shift = 'OC'
+                        elif shift_val in ['', 'O', '-']:
+                            shift = 'O'
+                        else:
+                            shift = 'O'  # Default
+                        
+                        shifts.append(shift)
+                    else:
+                        shifts.append('O')
+                
+                prev_data[nurse_id] = shifts
+        
+        return prev_data if prev_data else None
+        
+    except Exception as e:
+        st.error(f"❌ Error loading previous schedule: {e}")
+        return None
+
+def save_schedule_to_gsheet(schedule_df, year, month):
+    """บันทึกตารางเวรที่จัดเสร็จลง Google Sheets (Sheet: PreviousSchedule)"""
+    try:
+        sh = connect_gsheet()
+        if not sh:
+            return False
+        
+        # ลองเปิด worksheet 'PreviousSchedule' หรือสร้างใหม่
+        try:
+            ws = sh.worksheet("PreviousSchedule")
+        except:
+            # สร้าง worksheet ใหม่
+            ws = sh.add_worksheet(title="PreviousSchedule", rows=20, cols=40)
+        
+        # คำนวณจำนวนวันในเดือน
+        _, days_in_month = calendar.monthrange(year, month)
+        
+        # สร้าง header: พยาบาล, 1, 2, 3, ..., days_in_month
+        header = ['พยาบาล'] + [str(d) for d in range(1, days_in_month + 1)]
+        
+        # สร้างข้อมูล row
+        data = [header]
+        
+        for _, row in schedule_df.iterrows():
+            nurse_name = row.get('Nurse', row.iloc[0])
+            row_data = [nurse_name]
+            
+            for d in range(1, days_in_month + 1):
+                col_name = str(d)
+                shift_val = ''
+                
+                # ลองหา column (อาจมี emoji นำหน้า)
+                for prefix in ['🟡', '🔵', '']:
+                    possible_col = f"{prefix}{d}"
+                    if possible_col in row.index:
+                        shift_val = str(row[possible_col])
+                        break
+                    elif col_name in row.index:
+                        shift_val = str(row[col_name])
+                        break
+                
+                # ทำความสะอาด
+                if shift_val == 'nan' or pd.isna(shift_val) if isinstance(shift_val, float) else False:
+                    shift_val = ''
+                
+                row_data.append(shift_val)
+            
+            data.append(row_data)
+        
+        # เพิ่ม metadata row (optional)
+        metadata_row = [f'Updated: {year}/{month}'] + ['' for _ in range(days_in_month)]
+        data.append(metadata_row)
+        
+        # ล้างข้อมูลเดิมและเขียนใหม่
+        ws.clear()
+        ws.update(values=data, range_name='A1')
+        
+        return True
+        
+    except Exception as e:
+        st.error(f"❌ Error saving schedule to GSheet: {e}")
+        return False
+
 # --- Helper Function ---
 def get_week_occurrence(day):
     return (day - 1) // 7 + 1
@@ -521,7 +676,7 @@ def parse_previous_month_schedule(uploaded_file, nurses):
         return None
 
 # --- 1. ฟังก์ชันจัดตาราง (Scheduler Engine) ---
-def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=None, staffing_overrides=None, enable_oc=True, prev_month_data=None):
+def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=None, staffing_overrides=None, enable_oc=True, prev_month_data=None, ns_target=0):
     if fix_requests is None:
         fix_requests = []
     if staffing_overrides is None:
@@ -657,9 +812,7 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
             # ห้าม S -> N (บ่ายตามด้วยดึก)
             model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'N')] <= 1)
             model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'NS')] <= 1)
-            # ห้าม N -> S (ดึกตามด้วยบ่าย)
-            model.Add(shifts_var[(n, d, 'N')] + shifts_var[(n, d + 1, 'S')] <= 1)
-            model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 1, 'S')] <= 1)
+            # N -> S อนุญาตให้ได้ (ดึกแล้วบ่าย OK)
     
     # ห้าม S -> M -> N (บ่าย -> เช้า -> ดึก ใน 3 วันติด)
     for n in nurses:
@@ -749,14 +902,12 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         model.Add(shifts_var[('ER7', d, 'NS')] == 0)
     
     # ==========================================
-    # กระจาย NS เท่าเทียม แต่ลดให้น้อยที่สุด (NS = ทางเลือกสุดท้าย)
+    # กระจาย NS ตาม ns_target (0, 1, หรือ 2 เวร/คน)
     # ==========================================
-    # NS เป็น optional ไม่บังคับ แต่ถ้าต้องใช้ให้กระจายเท่าๆ กัน
-    
     for n in nurses_for_ns:
         ns_total = sum(shifts_var[(n, d, 'NS')] for d in range(1, days_in_month + 1))
-        # ไม่บังคับขั้นต่ำ แต่จำกัดสูงสุด 2 เวร/เดือน (ลดลงจาก 3)
-        model.Add(ns_total <= 2)  # สูงสุด 2 เวร NS/เดือน
+        # บังคับให้ NS = ns_target พอดี
+        model.Add(ns_total == ns_target)  # NS ของแต่ละคน = ns_target
 
     # ==========================================
     # ทำงานต่อเนื่อง: ห้ามเกิน 6 วันติด (HARD), ยอมให้ 7 วันถ้าจำเป็น (SOFT)
@@ -891,14 +1042,12 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         er7_sn_shifts.append(shifts_var[('ER7', d, 'S')])
         er7_sn_shifts.append(shifts_var[('ER7', d, 'N')])
 
-    # ER7 (Contract - RELAXED): 
-    # - เช้า+ลา/อบรม ≈ 10 เวร (ตามสัญญา ±1)
-    # - บ่าย+ดึก ≈ 10 เวร (ตามสัญญา ±1)
+    # ER7 (Contract - EXACT): 
+    # - เช้า+ลา/อบรม = 10 เวร (ตามสัญญา)
+    # - บ่าย+ดึก = 10 เวร (ตามสัญญา)
     er7_lt_shifts = [shifts_var[('ER7', d, 'L_T')] for d in range(1, days_in_month + 1)]
-    model.Add(sum(er7_m_shifts) + sum(er7_lt_shifts) >= 9)   # M + ลา/ประชุม >= 9
-    model.Add(sum(er7_m_shifts) + sum(er7_lt_shifts) <= 11)  # M + ลา/ประชุม <= 11
-    model.Add(sum(er7_sn_shifts) >= 9)   # S+N >= 9
-    model.Add(sum(er7_sn_shifts) <= 11)  # S+N <= 11
+    model.Add(sum(er7_m_shifts) + sum(er7_lt_shifts) == 10)   # M + ลา/ประชุม = 10
+    model.Add(sum(er7_sn_shifts) == 10)   # S+N = 10
     
     # ER7 ดึก (N) สูงสุด 4 เวร/เดือน
     er7_n_shifts = [shifts_var[('ER7', d, 'N')] for d in range(1, days_in_month + 1)]
@@ -1321,28 +1470,48 @@ with st.sidebar:
                             help="เวร OC = Standby ดึก 400 บาท/เวร | ER1,ER7 ห้ามทำ | ER4,ER8 ขอเลี่ยง")
     
     st.markdown("---")
-    st.header("📂 ตารางเดือนก่อน")
-    st.caption("Upload ไฟล์ gsheet ตารางเดือนก่อน เพื่อใช้กฎข้ามเดือน (N→M, S→N)")
+    st.header("🌙 เวร NS (OT)")
+    ns_target = st.selectbox(
+        "จำนวนเวร NS ต่อคน/เดือน", 
+        options=[0, 1, 2], 
+        index=0,
+        help="NS = บ่าย+ดึก (16 ชม.) | ER1, ER7 ไม่ทำ NS | 0 = ไม่มี NS, 1 = คนละ 1 เวร, 2 = คนละ 2 เวร"
+    )
+    if ns_target == 0:
+        st.info("ℹ️ ปิดเวร NS - ไม่มีเวรบ่าย+ดึกติดกัน")
+    else:
+        st.info(f"✅ เปิดเวร NS - แต่ละคน (ยกเว้น ER1, ER7) จะได้ {ns_target} เวร NS/เดือน")
     
-    tab_upload, tab_manual = st.tabs(["📂 Upload gsheet", "✍️ Manual Entry"])
+    st.header("📂 ตารางเดือนก่อน")
+    st.caption("ดึงตารางเวรเดือนก่อนจาก Google Sheets เพื่อใช้กฎข้ามเดือน (N→M, S→N)")
+    
+    tab_gsheet, tab_manual = st.tabs(["☁️ จาก Google Sheet", "✍️ Manual Entry"])
     prev_month_data = None
 
-    with tab_upload:
-        prev_month_file = st.file_uploader("เลือกไฟล์ gsheet", type=['gsheet'], key="prev_month_upload")
+    with tab_gsheet:
+        st.caption("กดปุ่มเพื่อดึงข้อมูลจาก Sheet 'PreviousSchedule'")
         
-        if prev_month_file is not None:
-            prev_month_data = parse_previous_month_schedule(prev_month_file, nurses_list)
-            if prev_month_data:
-                st.success(f"✅ อ่านข้อมูล {len(prev_month_data)} พยาบาล")
-                # แสดงเวรวันสุดท้ายของแต่ละคน
-                last_day_info = []
-                for n, shifts in prev_month_data.items():
-                    if shifts:
-                        last_day_info.append({'พยาบาล': n, 'เวรวันสุดท้าย': shifts[-1]})
-                if last_day_info:
-                    st.dataframe(pd.DataFrame(last_day_info), hide_index=True)
-            else:
-                st.error("❌ ไม่สามารถอ่านไฟล์ได้ ตรวจสอบ Encoding หรือรูปแบบไฟล์")
+        if st.button("🔄 ดึงตารางเดือนก่อนจาก GSheet", key="load_prev_schedule"):
+            with st.spinner("กำลังดึงข้อมูล..."):
+                loaded_data = load_previous_schedule_from_gsheet(nurses_list)
+                if loaded_data:
+                    st.session_state.prev_month_data_gsheet = loaded_data
+                    st.success(f"✅ อ่านข้อมูล {len(loaded_data)} พยาบาล จาก GSheet")
+                else:
+                    st.warning("⚠️ ไม่พบข้อมูลใน Sheet 'PreviousSchedule' หรือยังไม่มี Sheet นี้")
+        
+        # แสดงข้อมูลที่ดึงมาได้
+        if 'prev_month_data_gsheet' in st.session_state and st.session_state.prev_month_data_gsheet:
+            prev_month_data = st.session_state.prev_month_data_gsheet
+            st.info(f"📊 ใช้ข้อมูลจาก GSheet ({len(prev_month_data)} พยาบาล)")
+            
+            # แสดงเวรวันสุดท้ายของแต่ละคน
+            last_day_info = []
+            for n, shifts in prev_month_data.items():
+                if shifts:
+                    last_day_info.append({'พยาบาล': n, 'เวรวันสุดท้าย': shifts[-1] if shifts[-1] else 'O'})
+            if last_day_info:
+                st.dataframe(pd.DataFrame(last_day_info), hide_index=True)
 
     with tab_manual:
         st.caption("หรือกรอกข้อมูลเวร 7 วันสุดท้ายของเดือนก่อนด้วยตัวคุณเอง (M, S, N, O, NS)")
@@ -1786,7 +1955,7 @@ with st.sidebar:
                 year, month, days_in_month, nurses_list, 
                 st.session_state.requests,
                 st.session_state.fix_requests, st.session_state.staffing_overrides,
-                enable_oc=enable_oc, prev_month_data=prev_month_data
+                enable_oc=enable_oc, prev_month_data=prev_month_data, ns_target=ns_target
             )
             if df is not None:
                 st.session_state.schedule_df = df
@@ -1949,7 +2118,7 @@ if st.session_state.schedule_df is not None:
         )
         
         # ปุ่มบันทึกการแก้ไขและประมวลผลใหม่
-        col_btn1, col_btn2 = st.columns(2)
+        col_btn1, col_btn2, col_btn3 = st.columns(3)
         with col_btn1:
             if st.button("💾 บันทึกการแก้ไข", type="primary"):
                 # แปลง column กลับเป็นชื่อเดิมก่อนบันทึก
@@ -1965,7 +2134,25 @@ if st.session_state.schedule_df is not None:
                 st.success("บันทึกการแก้ไขแล้ว! ค่าตอบแทนจะถูกคำนวณใหม่โดยอัตโนมัติ")
                 st.rerun()
         with col_btn2:
-            if st.button("🔄 รีเซ็ตการแก้ไข (คืนค่าเดิม)"):
+            if st.button("☁️ บันทึกไป GSheet", type="secondary"):
+                with st.spinner("กำลังบันทึก..."):
+                    # แปลง column กลับก่อนบันทึก
+                    reverse_columns = {'พยาบาล': 'Nurse'}
+                    for d in range(1, days_in_month + 1):
+                        for prefix in ['🟡', '🔵', '']:
+                            styled_name = f"{prefix}{d}"
+                            if styled_name in edited_schedule.columns:
+                                reverse_columns[styled_name] = str(d)
+                                break
+                    save_df = edited_schedule.rename(columns=reverse_columns)
+                    
+                    if save_schedule_to_gsheet(save_df, year, month):
+                        st.success("✅ บันทึกตารางลง Google Sheet เรียบร้อย!")
+                        st.info("💡 ตารางนี้จะถูกใช้เป็นข้อมูลเดือนก่อนสำหรับเดือนถัดไป")
+                    else:
+                        st.error("❌ บันทึกไม่สำเร็จ")
+        with col_btn3:
+            if st.button("🔄 รีเซ็ตการแก้ไข"):
                 st.rerun()
 
     with tab2:
