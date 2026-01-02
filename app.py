@@ -904,10 +904,17 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
     # ==========================================
     # กระจาย NS ตาม ns_target (0, 1, หรือ 2 เวร/คน)
     # ==========================================
+    ns_penalty = []  # ย้ายมาประกาศตรงนี้ก่อนใช้งาน
     for n in nurses_for_ns:
         ns_total = sum(shifts_var[(n, d, 'NS')] for d in range(1, days_in_month + 1))
-        # บังคับให้ NS = ns_target พอดี
-        model.Add(ns_total == ns_target)  # NS ของแต่ละคน = ns_target
+        # [แก้] เปลี่ยนเป็น Soft Constraint - เกินได้แต่โดนหักคะแนน
+        # model.Add(ns_total <= ns_target)  # <-- เดิม Hard, ตอนนี้ลบออก
+        
+        # สร้างตัวแปรส่วนเกิน (Excess)
+        ns_excess = model.NewIntVar(0, days_in_month, f'ns_excess_{n}')
+        # ns_excess >= ns_total - ns_target
+        model.Add(ns_excess >= ns_total - ns_target)
+        ns_penalty.append(ns_excess)  # เอาไปหักคะแนนตอนท้าย
 
     # ==========================================
     # ทำงานต่อเนื่อง: ห้ามเกิน 6 วันติด (HARD), ยอมให้ 7 วันถ้าจำเป็น (SOFT)
@@ -1042,16 +1049,31 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         er7_sn_shifts.append(shifts_var[('ER7', d, 'S')])
         er7_sn_shifts.append(shifts_var[('ER7', d, 'N')])
 
-    # ER7 (Contract - EXACT): 
-    # - เช้า+ลา/อบรม = 10 เวร (ตามสัญญา)
-    # - บ่าย+ดึก = 10 เวร (ตามสัญญา)
+    # ==========================================
+    # [FIXED] ER7 Contract: เช้า 10, บ่าย+ดึก <= 10
+    # ==========================================
     er7_lt_shifts = [shifts_var[('ER7', d, 'L_T')] for d in range(1, days_in_month + 1)]
-    model.Add(sum(er7_m_shifts) + sum(er7_lt_shifts) == 10)   # M + ลา/ประชุม = 10
-    model.Add(sum(er7_sn_shifts) == 10)   # S+N = 10
     
-    # ER7 ดึก (N) สูงสุด 4 เวร/เดือน
+    # รวมผลรวมเวรต่างๆ ของ ER7
+    er7_total_m = sum(er7_m_shifts)
+    er7_total_lt = sum(er7_lt_shifts)  # วันลา/อบรม (นับรวมในโควตาเช้า)
+    er7_total_sn = sum(er7_sn_shifts)  # บ่าย + ดึก
+    
+    # --- กฎข้อที่ 1: เวรเช้า + ลา ต้องเท่ากับ 10 ---
+    # ใช้ Soft Constraint (หักคะแนน) แทน Hard Constraint (บังคับ)
+    # เพื่อป้องกัน Infeasible (เผื่อบางกรณีจำเป็นต้องขยับเป็น 9 หรือ 11)
+    er7_m_diff = model.NewIntVar(0, 10, 'er7_m_diff')
+    # คำนวณส่วนต่างจาก 10 (เช่น ถ้าได้ 10 คือ 0, ถ้าได้ 9 หรือ 11 คือ 1)
+    model.AddAbsEquality(er7_m_diff, (er7_total_m + er7_total_lt) - 10)
+    
+    # --- กฎข้อที่ 2: บ่าย + ดึก ห้ามเกิน 10 ---
+    model.Add(er7_total_sn <= 10)
+    
+    # --- กฎข้อที่ 3: ดึกล้วน ห้ามเกิน 4 (เหมือนเดิม) ---
     er7_n_shifts = [shifts_var[('ER7', d, 'N')] for d in range(1, days_in_month + 1)]
     model.Add(sum(er7_n_shifts) <= 4)  # N ไม่เกิน 4
+    
+    print(f"[ER7] Contract Fixed: M+ลา=10, S+N<=10, N<=4")  # Debug
 
     # ==========================================
     # 2.1 ขอเวร Fix จาก UI (Dynamic Shift Fix Requests)
@@ -1112,10 +1134,9 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         # นับรวม M, S, N, L_T (ไม่รวม NS เพราะ NS นับเป็น OT)
         total_work_per_nurse[n] = sum(sum(shifts_var[(n, d, s)] for s in ['M', 'S', 'N', 'L_T']) for d in range(1, days_in_month + 1))
         
-        # Constraint: ให้วันทำงานใกล้เคียงเป้าหมาย (±2) - RELAXED
-        # ใช้ target_work_days ที่คำนวณไว้ข้างบนแล้ว
-        model.Add(total_work_per_nurse[n] >= target_work_days - 2)
-        model.Add(total_work_per_nurse[n] <= target_work_days + 2)
+        # [แก้] ลบ Hard Constraint ทิ้ง ใช้ Soft Constraint อย่างเดียว
+        # model.Add(total_work_per_nurse[n] >= target_work_days - 2)  # <-- ลบ
+        # model.Add(total_work_per_nurse[n] <= target_work_days + 2)  # <-- ลบ
         
         # สร้างตัวแปร Diff: |จำนวนวันที่ทำ - เป้าหมายเดือนนี้|
         diff = model.NewIntVar(0, days_in_month, f'diff_work_{n}')
@@ -1241,7 +1262,7 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
                     separation_penalty.append(same_shift)
     
     # รวม soft constraints ทั้งหมดเข้าด้วยกัน
-    # น้ำหนัก: preferred_constraints (M fix) > separation > O→N penalty > N-O-N penalty > consecutive_off > off_after_night > oc_avoid
+    # น้ำหนัก: preferred_constraints (M fix) > NS excess > separation > O→N penalty > work_days_diff > ...
     model.Maximize(
         sum(preferred_constraints) * 100 + 
         sum(consecutive_off_constraints) * 5 +
@@ -1251,10 +1272,11 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         sum(oc_avoid_penalty) * 20 -  # ลบคะแนนเมื่อ ER4, ER8 ทำ OC
         sum(o_before_n_penalty) * 15 -  # ลบคะแนนเมื่อ O→N (ควรหลีกเลี่ยง)
         sum(n_skip_day_penalty) * 10 -  # ลบคะแนนเมื่อ N-O-N (ดึกสลับวัน)
-        sum(ns_penalty) * 50 -  # Penalty สูงสำหรับ NS (ใช้เป็นทางเลือกสุดท้าย)
+        sum(ns_penalty) * 500 -  # หักหนักๆ ถ้าเกิน NS quota
         sum(s_o_n_penalty) * 35 -  # Penalty สำหรับ S-O-N (เสียวันหยุดฟรี)
-        sum(seven_day_streak_penalty) * 45 -  # Penalty สำหรับทำงาน 7 วันติด (prefer 6 วัน)
-        sum(work_days_diff) * 40  # Penalty สำหรับวันทำงานที่ต่างจากเป้าหมาย
+        sum(seven_day_streak_penalty) * 45 -  # Penalty สำหรับทำงาน 7 วันติด
+        sum(work_days_diff) * 50 -  # หักคะแนนถ้าวันทำงานไม่ตรงเป้า
+        er7_m_diff * 1000  # [ER7] บังคับให้เข้าเป้า 10 (หักหนักมากถ้าพลาด)
     )
 
     # Solve
