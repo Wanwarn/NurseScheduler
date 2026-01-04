@@ -3,6 +3,15 @@ from ortools.sat.python import cp_model
 import pandas as pd
 import calendar
 import os # อย่าลืม import os
+from datetime import datetime
+import pytz
+
+# --- Thai Timezone Helper ---
+def get_thai_time():
+    """คืนค่าเวลาไทย (Asia/Bangkok) ไม่ว่าจะรันที่ไหนก็ตาม"""
+    bangkok_tz = pytz.timezone('Asia/Bangkok')
+    return datetime.now(bangkok_tz).strftime("%Y-%m-%d %H:%M:%S")
+
 
 # --- Thai Public Holidays 2025-2026 ---
 THAI_HOLIDAYS = {
@@ -118,8 +127,7 @@ def load_requests_from_gsheet():
         if not sh: return []
         records = sh.worksheet("LeaveRequests").get_all_records()
         
-        from datetime import datetime
-        sync_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        sync_time = get_thai_time()
         
         # แปลงชื่อ nurse กลับเป็นรหัส ER และเพิ่ม timestamp ถ้าไม่มี
         for r in records:
@@ -186,8 +194,7 @@ def load_fix_requests_from_gsheet():
         if not sh: return []
         records = sh.worksheet("FixRequests").get_all_records()
         
-        from datetime import datetime
-        sync_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        sync_time = get_thai_time()
         
         for r in records:
             # แปลงชื่อ nurse กลับเป็นรหัส ER
@@ -1666,9 +1673,8 @@ with st.sidebar:
             else:
                 code = 'Train'
             
-            # สร้าง timestamp
-            from datetime import datetime
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # สร้าง timestamp (ใช้เวลาไทย)
+            timestamp = get_thai_time()
             
             for d in r_dates:
                 # FIX: บันทึกเดือนและปีไปด้วย + priority + timestamp
@@ -1744,9 +1750,8 @@ with st.sidebar:
             if selected_dates:
                 shift_code = {'เช้า (M)': 'M', 'บ่าย (S)': 'S', 'ดึก (N)': 'N'}[f_shift]
                 
-                # สร้าง timestamp
-                from datetime import datetime
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                # สร้าง timestamp (ใช้เวลาไทย)
+                timestamp = get_thai_time()
                 
                 st.session_state.fix_requests.append({
                     'nurse': f_nurse,
