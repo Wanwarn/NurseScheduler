@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="th">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🏥 คู่มือการใช้งานแอพจัดตารางเวร</title>
+    <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #667eea;
+            --primary-dark: #5a67d8;
+            --secondary: #48bb78;
+            --accent: #ed8936;
+            --danger: #f56565;
+            --bg-dark: #1a202c;
+            --bg-card: #2d3748;
+            --text-light: #e2e8f0;
+            --text-muted: #a0aec0;
+            --gradient-1: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --gradient-2: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            --gradient-3: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            --gradient-4: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+            --gradient-5: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+            --gradient-6: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Prompt', sans-serif;
+            background: var(--bg-dark);
+            color: var(--text-light);
+            min-height: 100vh;
+            padding: 2rem;
+            background-image:
+                radial-gradient(ellipse at top left, rgba(102, 126, 234, 0.15) 0%, transparent 50%),
+                radial-gradient(ellipse at bottom right, rgba(118, 75, 162, 0.15) 0%, transparent 50%);
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        /* Header */
+        .header {
+            text-align: center;
+            margin-bottom: 3rem;
+            padding: 2.5rem;
+            background: var(--gradient-1);
+            border-radius: 24px;
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(102, 126, 234, 0.3);
+        }
+
+        .header::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(255, 255, 255, 0.1) 0%, transparent 60%);
+            animation: pulse 4s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                transform: scale(1);
+                opacity: 0.5;
+            }
+
+            50% {
+                transform: scale(1.1);
+                opacity: 0.8;
+            }
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            position: relative;
+            z-index: 1;
+            text-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+            margin-top: 0.5rem;
+            position: relative;
+            z-index: 1;
+        }
+
+        /* Steps Grid */
+        .steps-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        /* Step Card */
+        .step-card {
+            background: var(--bg-card);
+            border-radius: 20px;
+            padding: 1.8rem;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.3s ease;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .step-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+        }
+
+        .step-number {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            width: 50px;
+            height: 50px;
+            border-radius: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: white;
+        }
+
+        .step-1 .step-number {
+            background: var(--gradient-1);
+        }
+
+        .step-2 .step-number {
+            background: var(--gradient-2);
+        }
+
+        .step-3 .step-number {
+            background: var(--gradient-3);
+        }
+
+        .step-4 .step-number {
+            background: var(--gradient-4);
+        }
+
+        .step-5 .step-number {
+            background: var(--gradient-5);
+        }
+
+        .step-6 .step-number {
+            background: var(--gradient-6);
+            color: #333;
+        }
+
+        .step-icon {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .step-title {
+            font-size: 1.3rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            color: var(--text-light);
+        }
+
+        .step-content {
+            color: var(--text-muted);
+            line-height: 1.8;
+        }
+
+        .step-content ul {
+            list-style: none;
+            padding-left: 0;
+        }
+
+        .step-content li {
+            padding: 0.6rem 0;
+            padding-left: 1.8rem;
+            position: relative;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .step-content li:last-child {
+            border-bottom: none;
+        }
+
+        .step-content li::before {
+            content: '▸';
+            position: absolute;
+            left: 0;
+            color: var(--primary);
+            font-size: 1rem;
+        }
+
+        /* Highlight Tags */
+        .tag {
+            display: inline-block;
+            padding: 0.2rem 0.6rem;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            font-weight: 500;
+            margin: 0.2rem;
+        }
+
+        .tag-primary {
+            background: rgba(102, 126, 234, 0.2);
+            color: #a3bffa;
+        }
+
+        .tag-success {
+            background: rgba(72, 187, 120, 0.2);
+            color: #9ae6b4;
+        }
+
+        .tag-warning {
+            background: rgba(237, 137, 54, 0.2);
+            color: #fbd38d;
+        }
+
+        .tag-info {
+            background: rgba(79, 172, 254, 0.2);
+            color: #90cdf4;
+        }
+
+        /* Action Button Style */
+        .action-btn {
+            display: inline-block;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 0.4rem 0.8rem;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            color: var(--text-light);
+            margin: 0.3rem 0;
+        }
+
+        /* Tip Box */
+        .tip-box {
+            background: linear-gradient(135deg, rgba(72, 187, 120, 0.1) 0%, rgba(56, 161, 105, 0.1) 100%);
+            border: 1px solid rgba(72, 187, 120, 0.3);
+            border-radius: 12px;
+            padding: 1rem;
+            margin-top: 1rem;
+            font-size: 0.9rem;
+        }
+
+        .tip-box::before {
+            content: '💡 ';
+        }
+
+        /* Warning Box */
+        .warning-box {
+            background: linear-gradient(135deg, rgba(237, 137, 54, 0.1) 0%, rgba(221, 107, 32, 0.1) 100%);
+            border: 1px solid rgba(237, 137, 54, 0.3);
+            border-radius: 12px;
+            padding: 1rem;
+            margin-top: 1rem;
+            font-size: 0.9rem;
+        }
+
+        .warning-box::before {
+            content: '⚠️ ';
+        }
+
+        /* Flow Diagram */
+        .flow-section {
+            margin-top: 3rem;
+            background: var(--bg-card);
+            border-radius: 24px;
+            padding: 2rem;
+        }
+
+        .flow-title {
+            text-align: center;
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 2rem;
+        }
+
+        .flow-diagram {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .flow-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .flow-step {
+            background: var(--gradient-1);
+            padding: 0.8rem 1.2rem;
+            border-radius: 12px;
+            font-weight: 500;
+            white-space: nowrap;
+            transition: all 0.3s ease;
+        }
+
+        .flow-step:hover {
+            transform: scale(1.05);
+        }
+
+        .flow-arrow {
+            color: var(--text-muted);
+            font-size: 1.5rem;
+        }
+
+        /* Legend */
+        .legend {
+            margin-top: 2rem;
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+            flex-wrap: wrap;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .legend-color {
+            width: 24px;
+            height: 24px;
+            border-radius: 6px;
+        }
+
+        .legend-holiday {
+            background: #ffd700;
+        }
+
+        .legend-weekend {
+            background: #4a9eff;
+        }
+
+        .legend-normal {
+            background: #a0aec0;
+        }
+
+        /* Footer */
+        .footer {
+            text-align: center;
+            margin-top: 3rem;
+            padding: 1.5rem;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            body {
+                padding: 1rem;
+            }
+
+            .header h1 {
+                font-size: 1.8rem;
+            }
+
+            .steps-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .flow-diagram {
+                flex-direction: column;
+            }
+
+            .flow-arrow {
+                transform: rotate(90deg);
+            }
+        }
+
+        /* Print Styles */
+        @media print {
+            body {
+                background: white;
+                color: #333;
+            }
+
+            .step-card {
+                background: #f7f7f7;
+                border: 1px solid #ddd;
+            }
+
+            .step-content {
+                color: #555;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <h1>🏥 คู่มือการใช้งานแอพจัดตารางเวร</h1>
+            <p>ฉบับเข้าใจง่าย - Nurse Scheduling Application Guide</p>
+        </header>
+
+        <!-- Steps Grid -->
+        <div class="steps-grid">
+            <!-- Step 1 -->
+            <div class="step-card step-1">
+                <div class="step-number">1</div>
+                <div class="step-icon">⚙️</div>
+                <h2 class="step-title">เริ่มต้นใช้งาน (Setup)</h2>
+                <div class="step-content">
+                    <ul>
+                        <li><strong>เลือกปี/เดือน:</strong> ที่แถบด้านซ้าย (Sidebar) เพื่อกำหนดเดือนที่จะจัดตาราง</li>
+                        <li><strong>ตรวจสอบเป้าหมาย:</strong> ดูที่แถบด้านซ้าย ระบบจะแสดง <span
+                                class="tag tag-primary">"เป้าหมายวันหยุด/คน"</span> เช่น ควรได้หยุด ~3 วัน</li>
+                    </ul>
+                    <div class="tip-box">
+                        ระบบจะคำนวณเป้าหมายวันหยุดให้อัตโนมัติตามปฏิทิน
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 2 -->
+            <div class="step-card step-2">
+                <div class="step-number">2</div>
+                <div class="step-icon">📝</div>
+                <h2 class="step-title">บันทึกข้อมูลสำคัญ (Input Data)</h2>
+                <div class="step-content">
+                    <ul>
+                        <li><span class="tag tag-info">📝 วันลา/ประชุม</span> เลือกชื่อ, ประเภท, วันที่, ความสำคัญ
+                            (เลขน้อย=สำคัญมาก) → กด <span class="action-btn">เพิ่มรายการ</span></li>
+                        <li><span class="tag tag-warning">📌 ขอเวร (Fix)</span> เลือกชื่อ, กะ (เช้า/บ่าย/ดึก), วันที่ →
+                            กด <span class="action-btn">เพิ่มรายการ</span> เพื่อล็อกเวรที่ต้องการ</li>
+                        <li><span class="tag tag-success">👥 กำลังคนพิเศษ</span> ใช้เมื่อต้องการคนเพิ่ม/ลดในบางวัน (เช่น
+                            วันที่มีเคสเยอะ)</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Step 3 -->
+            <div class="step-card step-3">
+                <div class="step-number">3</div>
+                <div class="step-icon">🔍</div>
+                <h2 class="step-title">ตรวจสอบความพร้อม (Pre-check)</h2>
+                <div class="step-content">
+                    <ul>
+                        <li>เลื่อนลงมาที่ส่วน <span class="tag tag-warning">"⚠️ ตรวจสอบข้อมูลก่อนจัดตาราง"</span></li>
+                        <li>ระบบจะช่วยเช็คว่ามีปัญหาอะไรไหม เช่น วันไหนคนลาเยอะเกินไป หรือมีคำขอซ้ำซ้อน</li>
+                        <li>ถ้าขึ้น <span class="tag tag-success">✅ สีเขียว</span> แสดงว่าพร้อมลุย!</li>
+                    </ul>
+                    <div class="warning-box">
+                        ควรแก้ไขปัญหาทั้งหมดก่อนจัดตาราง เพื่อผลลัพธ์ที่ดีที่สุด
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 4 -->
+            <div class="step-card step-4">
+                <div class="step-number">4</div>
+                <div class="step-icon">🚀</div>
+                <h2 class="step-title">จัดตาราง (Run Scheduler)</h2>
+                <div class="step-content">
+                    <ul>
+                        <li>กดปุ่ม <span class="action-btn">🚀 ประมวลผลจัดตาราง</span></li>
+                        <li>รอสักครู่ (ประมาณ <strong>10-20 วินาที</strong>)</li>
+                        <li>AI จะคำนวณและเกลี่ยเวรให้ทุกคนอย่าง<strong>ยุติธรรมที่สุด</strong></li>
+                    </ul>
+                    <div class="tip-box">
+                        ระบบใช้ OR-Tools Constraint Programming เพื่อหาทางออกที่ดีที่สุด
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 5 -->
+            <div class="step-card step-5">
+                <div class="step-number">5</div>
+                <div class="step-icon">✏️</div>
+                <h2 class="step-title">ตรวจสอบและแก้ไข (Review & Edit)</h2>
+                <div class="step-content">
+                    <ul>
+                        <li><strong>ดูตาราง:</strong> ไปที่แท็บ <span class="tag tag-primary">📅 ตารางเวร</span></li>
+                        <li><strong>สัญลักษณ์:</strong> 🟡 = วันหยุดนักขัตฤกษ์ | 🔵 = เสาร์-อาทิตย์</li>
+                        <li><strong>แก้ไขเวร:</strong> คลิกแก้ในตารางได้เลย → กด <span class="action-btn">💾
+                                บันทึกการแก้ไข</span></li>
+                        <li><strong>ดูคะแนน/รายได้:</strong> เช็คที่แท็บ <span class="tag tag-info">📊 คะแนน</span> และ
+                            <span class="tag tag-success">💰 ค่าตอบแทน</span></li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Step 6 -->
+            <div class="step-card step-6">
+                <div class="step-number">6</div>
+                <div class="step-icon">☁️</div>
+                <h2 class="step-title">บันทึกและแชร์ (Save & Share)</h2>
+                <div class="step-content">
+                    <ul>
+                        <li>เมื่อพอใจแล้ว กด <span class="action-btn">☁️ บันทึกไป GSheet</span> เพื่อเก็บเข้า Google
+                            Sheets</li>
+                        <li>กด <span class="action-btn">📥 ดาวน์โหลดรายงานรายได้</span> เพื่อเก็บไฟล์ Excel
+                            สรุปเงินเดือน</li>
+                    </ul>
+                    <div class="tip-box">
+                        ข้อมูลจะถูกบันทึกพร้อม Timestamp เพื่อติดตามการเปลี่ยนแปลง
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Flow Diagram -->
+        <section class="flow-section">
+            <h2 class="flow-title">📋 ขั้นตอนการใช้งานโดยสรุป</h2>
+            <div class="flow-diagram">
+                <div class="flow-item">
+                    <div class="flow-step">⚙️ ตั้งค่า</div>
+                    <span class="flow-arrow">→</span>
+                </div>
+                <div class="flow-item">
+                    <div class="flow-step">📝 ใส่ข้อมูล</div>
+                    <span class="flow-arrow">→</span>
+                </div>
+                <div class="flow-item">
+                    <div class="flow-step">🔍 ตรวจสอบ</div>
+                    <span class="flow-arrow">→</span>
+                </div>
+                <div class="flow-item">
+                    <div class="flow-step">🚀 ประมวลผล</div>
+                    <span class="flow-arrow">→</span>
+                </div>
+                <div class="flow-item">
+                    <div class="flow-step">✏️ แก้ไข</div>
+                    <span class="flow-arrow">→</span>
+                </div>
+                <div class="flow-item">
+                    <div class="flow-step">☁️ บันทึก</div>
+                </div>
+            </div>
+
+            <!-- Legend -->
+            <div class="legend">
+                <div class="legend-item">
+                    <div class="legend-color legend-holiday"></div>
+                    <span>🟡 วันหยุดนักขัตฤกษ์</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color legend-weekend"></div>
+                    <span>🔵 วันเสาร์-อาทิตย์</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color legend-normal"></div>
+                    <span>⚪ วันธรรมดา</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>🏥 Nurse Scheduling Application | พัฒนาเพื่อให้การจัดตารางเวรเป็นเรื่องง่าย</p>
+            <p style="margin-top: 0.5rem; font-size: 0.8rem;">Version 2.0 | ใช้ OR-Tools Constraint Programming</p>
+            <p style="margin-top: 1rem; font-size: 0.85rem; font-weight: 500; color: #a3bffa;">by Mkbt.9</p>
+        </footer>
+    </div>
+</body>
+
+</html>
