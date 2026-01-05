@@ -126,6 +126,7 @@ def load_requests_from_gsheet():
         sh = connect_gsheet()
         if not sh: return []
         records = sh.worksheet("LeaveRequests").get_all_records()
+        records = [r for r in records if r.get('nurse') and str(r.get('nurse')).strip()]  # filter แถวว่าง
         
         sync_time = get_thai_time()
         
@@ -148,8 +149,9 @@ def save_requests_to_gsheet():
         # Header ที่ถูกต้อง (พร้อม timestamp)
         headers = ['nurse', 'date', 'month', 'year', 'type', 'priority', 'timestamp']
         
-        # 1. อ่านข้อมูลเดิมจาก Google Sheet
+        # 1. อ่านข้อมูลเดิมจาก Google Sheet (filter แถวว่างออก)
         existing_records = ws.get_all_records()
+        existing_records = [r for r in existing_records if r.get('nurse') and str(r.get('nurse')).strip()]  # ข้ามแถวที่ nurse ว่าง
         
         # 2. สร้าง set ของข้อมูลที่มีอยู่แล้ว (nurse, date, month, year) เพื่อเช็ค duplicate
         existing_keys = set()
@@ -947,12 +949,12 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
                     elif override.get('shift') == 'S':
                         s_req = override.get('count', 2)
         
-        # N + NS >= n_req (RELAXED - อย่างน้อย n_req คน)
-        model.Add(sum(shifts_var[(n, d, 'N')] + shifts_var[(n, d, 'NS')] for n in nurses) >= n_req)
-        # S + NS >= s_req (RELAXED - อย่างน้อย s_req คน)
-        model.Add(sum(shifts_var[(n, d, 'S')] + shifts_var[(n, d, 'NS')] for n in nurses) >= s_req)
+        # N + NS == n_req (EXACT - บังคับ n_req คน)
+        model.Add(sum(shifts_var[(n, d, 'N')] + shifts_var[(n, d, 'NS')] for n in nurses) == n_req)
+        # S + NS == s_req (EXACT - บังคับ s_req คน)
+        model.Add(sum(shifts_var[(n, d, 'S')] + shifts_var[(n, d, 'NS')] for n in nurses) == s_req)
         req_m = 4 if is_special_day else 3  # เสาร์-อาทิตย์ หรือ วันหยุดนักขัตฤกษ์ = 4 คน
-        model.Add(sum(shifts_var[(n, d, 'M')] for n in nurses) >= req_m)  # RELAXED
+        model.Add(sum(shifts_var[(n, d, 'M')] for n in nurses) == req_m)  # EXACT: บังคับ M = 3 (วันทำการ) หรือ 4 (วันหยุด)
 
     # กฎการสลับเวร
     for n in nurses:
@@ -1643,9 +1645,9 @@ with st.sidebar:
     st.header("🌙 เวร NS (OT)")
     ns_target = st.selectbox(
         "จำนวนเวร NS ต่อคน/เดือน", 
-        options=[0, 1, 2], 
+        options=[0, 1, 2, 3, 4, 5], 
         index=0,
-        help="NS = บ่าย+ดึก (16 ชม.) | ER1, ER7 ไม่ทำ NS | 0 = ไม่มี NS, 1 = คนละ 1 เวร, 2 = คนละ 2 เวร"
+        help="NS = บ่าย+ดึก (16 ชม.) | ER1, ER7 ไม่ทำ NS | 0 = ไม่มี NS, 1-5 = คนละกี่เวร/เดือน"
     )
     if ns_target == 0:
         st.info("ℹ️ ปิดเวร NS - ไม่มีเวรบ่าย+ดึกติดกัน")
@@ -2382,7 +2384,7 @@ if st.session_state.schedule_df is not None:
             # NS ได้ค่าเวร 2 เท่า (บ่าย+ดึก)
             shift_allowance = (c_s + c_n + c_ns * 2) * rate_sn  # NS = 2 เวร
             oc_allowance = c_oc * 400  # ค่าเวร OC = 400 บาท
-            ot_shifts = max(0, total_work - std_work_days) + c_ns  # NS นับเป็น OT ด้วย
+            ot_shifts = max(0, total_work - std_work_days)  # นับ OT เป็นวัน (NS อยู่ใน total_work แล้ว)
             ot_pay = ot_shifts * ot_rate  # เงิน OT
             total_income = shift_allowance + oc_allowance + ot_pay  # รวมเงินทั้งหมด
             
