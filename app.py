@@ -2736,8 +2736,35 @@ if st.session_state.schedule_df is not None:
         
         df_forecast = pd.DataFrame(yearly_forecast)
         
+        # เพิ่มแถว Min และ Max
+        min_row = {
+            'เดือน': '📉 Min',
+            'วันในเดือน': df_forecast['วันในเดือน'].min(),
+            'ส-อา': df_forecast['ส-อา'].min(),
+            'นักขัตฤกษ์': df_forecast['นักขัตฤกษ์'].min(),
+            'วันทำงาน': df_forecast['วันทำงาน'].min(),
+            'รวมเวร': df_forecast['รวมเวร'].min(),
+            'เวรเช้า (M)': df_forecast['เวรเช้า (M)'].min(),
+            'เวรบ่าย (S)': df_forecast['เวรบ่าย (S)'].min(),
+            'เวรดึก (N)': df_forecast['เวรดึก (N)'].min()
+        }
+        max_row = {
+            'เดือน': '📈 Max',
+            'วันในเดือน': df_forecast['วันในเดือน'].max(),
+            'ส-อา': df_forecast['ส-อา'].max(),
+            'นักขัตฤกษ์': df_forecast['นักขัตฤกษ์'].max(),
+            'วันทำงาน': df_forecast['วันทำงาน'].max(),
+            'รวมเวร': df_forecast['รวมเวร'].max(),
+            'เวรเช้า (M)': df_forecast['เวรเช้า (M)'].max(),
+            'เวรบ่าย (S)': df_forecast['เวรบ่าย (S)'].max(),
+            'เวรดึก (N)': df_forecast['เวรดึก (N)'].max()
+        }
+        
+        # รวม dataframe
+        df_with_summary = pd.concat([df_forecast, pd.DataFrame([min_row, max_row])], ignore_index=True)
+        
         # แสดงตาราง
-        st.dataframe(df_forecast, use_container_width=True, hide_index=True)
+        st.dataframe(df_with_summary, use_container_width=True, hide_index=True)
         
         # สรุปทั้งปี
         st.markdown("---")
