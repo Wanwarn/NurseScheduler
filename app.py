@@ -2717,9 +2717,10 @@ if st.session_state.schedule_df is not None:
             
             # เฉลี่ยต่อคน (9 คนที่ rotate, ไม่รวม ER1)
             rotating_nurses = 9
-            avg_m = round(total_m_slots / rotating_nurses, 1)
-            avg_s = round(total_s_slots / rotating_nurses, 1)
-            avg_n = round(total_n_slots / rotating_nurses, 1)
+            avg_m = round(total_m_slots / rotating_nurses)
+            avg_s = round(total_s_slots / rotating_nurses)
+            avg_n = round(total_n_slots / rotating_nurses)
+            total_shifts = avg_m + avg_s + avg_n  # รวมเวรทั้งหมด
             
             yearly_forecast.append({
                 'เดือน': month_names_th[m],
@@ -2727,6 +2728,7 @@ if st.session_state.schedule_df is not None:
                 'ส-อา': weekends,
                 'นักขัตฤกษ์': len(holiday_list),
                 'วันทำงาน': work_days,
+                'รวมเวร': total_shifts,
                 'เวรเช้า (M)': avg_m,
                 'เวรบ่าย (S)': avg_s,
                 'เวรดึก (N)': avg_n
