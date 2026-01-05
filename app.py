@@ -2673,3 +2673,80 @@ if st.session_state.schedule_df is not None:
             3. ระบบจะบันทึกสรุปยอดอัตโนมัติลงใน Sheet "SummaryLog"
             4. กลับมาดูที่แท็บนี้เพื่อดูภาพรวมรายปี
             """)
+        
+        # ===== สรุปเฉลี่ยเวรล่วงหน้าตลอดทั้งปี =====
+        st.markdown("---")
+        st.markdown("### 📅 สรุปเฉลี่ยเวรล่วงหน้าตลอดทั้งปี (คำนวณจากปฏิทิน)")
+        
+        # เลือกปีที่ต้องการดู
+        forecast_year = st.selectbox("🗓️ เลือกปี:", [2025, 2026, 2027], index=1, key="forecast_year")
+        
+        # คำนวณวันทำงานและเวรล่วงหน้าสำหรับทุกเดือน
+        yearly_forecast = []
+        month_names_th = ['', 'ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 
+                          'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.']
+        
+        total_year_workdays = 0
+        total_year_special = 0
+        
+        for m in range(1, 13):
+            _, days_in_m = calendar.monthrange(forecast_year, m)
+            
+            # นับวัน ส-อา
+            weekends = sum(1 for d in range(1, days_in_m + 1) if calendar.weekday(forecast_year, m, d) >= 5)
+            
+            # นับวันหยุดนักขัตฤกษ์ที่ตรง จ-ศ
+            holiday_list = THAI_HOLIDAYS.get(forecast_year, {}).get(m, [])
+            holidays_weekday = sum(1 for d in holiday_list if calendar.weekday(forecast_year, m, d) < 5)
+            
+            # วันทำงาน = วันในเดือน - ส-อา - นักขัตฤกษ์ที่ตรงวันธรรมดา
+            work_days = days_in_m - weekends - holidays_weekday
+            special_days = weekends + len(holiday_list)  # วันพิเศษ (ส-อา + นักขัตฤกษ์ทั้งหมด)
+            
+            total_year_workdays += work_days
+            total_year_special += special_days
+            
+            # คำนวณเฉลี่ยเวร (สมมติ 10 พยาบาล, หักคน fix)
+            # เวรเช้า: วันธรรมดา 3 คน, วันพิเศษ 4 คน
+            weekday_count = days_in_m - weekends
+            special_count = weekends + len([d for d in holiday_list if calendar.weekday(forecast_year, m, d) < 5])
+            
+            total_m_slots = (weekday_count * 3) + (special_count * 4)  # slot เวรเช้าทั้งหมด
+            total_s_slots = days_in_m * 2  # slot เวรบ่าย (2 คน/วัน)
+            total_n_slots = days_in_m * 1  # slot เวรดึก (1 คน/วัน)
+            
+            # เฉลี่ยต่อคน (9 คนที่ rotate, ไม่รวม ER1)
+            rotating_nurses = 9
+            avg_m = round(total_m_slots / rotating_nurses, 1)
+            avg_s = round(total_s_slots / rotating_nurses, 1)
+            avg_n = round(total_n_slots / rotating_nurses, 1)
+            
+            yearly_forecast.append({
+                'เดือน': month_names_th[m],
+                'วันในเดือน': days_in_m,
+                'ส-อา': weekends,
+                'นักขัตฤกษ์': len(holiday_list),
+                'วันทำงาน': work_days,
+                'เวรเช้า (M)': avg_m,
+                'เวรบ่าย (S)': avg_s,
+                'เวรดึก (N)': avg_n
+            })
+        
+        df_forecast = pd.DataFrame(yearly_forecast)
+        
+        # แสดงตาราง
+        st.dataframe(df_forecast, use_container_width=True, hide_index=True)
+        
+        # สรุปทั้งปี
+        st.markdown("---")
+        col_y1, col_y2, col_y3, col_y4 = st.columns(4)
+        with col_y1:
+            st.metric("📅 วันทำงานทั้งปี", f"{total_year_workdays} วัน")
+        with col_y2:
+            st.metric("🏖️ วัน ส-อา/นักขัตฤกษ์", f"{total_year_special} วัน")
+        with col_y3:
+            avg_work_per_month = round(total_year_workdays / 12, 1)
+            st.metric("⌀ เฉลี่ย/เดือน", f"{avg_work_per_month} วัน")
+        with col_y4:
+            total_shifts = sum(d['เวรเช้า (M)'] + d['เวรบ่าย (S)'] + d['เวรดึก (N)'] for d in yearly_forecast)
+            st.metric("📊 เวรรวม/คน/ปี", f"~{total_shifts:.0f} เวร")
