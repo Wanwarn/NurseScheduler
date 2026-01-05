@@ -2722,6 +2722,7 @@ if st.session_state.schedule_df is not None:
             avg_n = round(total_n_slots / rotating_nurses)
             total_shifts = avg_m + avg_s + avg_n  # รวมเวรทั้งหมด
             
+            # คำนวณ MIN/MAX (เนื่องจากเป็นค่าเฉลี่ย จึงให้ ±1 เป็น range)
             yearly_forecast.append({
                 'เดือน': month_names_th[m],
                 'วันในเดือน': days_in_m,
@@ -2729,42 +2730,18 @@ if st.session_state.schedule_df is not None:
                 'นักขัตฤกษ์': len(holiday_list),
                 'วันทำงาน': work_days,
                 'รวมเวร': total_shifts,
-                'เวรเช้า (M)': avg_m,
-                'เวรบ่าย (S)': avg_s,
-                'เวรดึก (N)': avg_n
+                'MIN เวรเช้า': max(avg_m - 1, 0),
+                'MAX เวรเช้า': avg_m + 1,
+                'MIN เวรบ่าย': max(avg_s - 1, 0),
+                'MAX เวรบ่าย': avg_s + 1,
+                'MIN เวรดึก': max(avg_n - 1, 0),
+                'MAX เวรดึก (N)': avg_n + 1
             })
         
         df_forecast = pd.DataFrame(yearly_forecast)
         
-        # เพิ่มแถว Min และ Max
-        min_row = {
-            'เดือน': '📉 Min',
-            'วันในเดือน': df_forecast['วันในเดือน'].min(),
-            'ส-อา': df_forecast['ส-อา'].min(),
-            'นักขัตฤกษ์': df_forecast['นักขัตฤกษ์'].min(),
-            'วันทำงาน': df_forecast['วันทำงาน'].min(),
-            'รวมเวร': df_forecast['รวมเวร'].min(),
-            'เวรเช้า (M)': df_forecast['เวรเช้า (M)'].min(),
-            'เวรบ่าย (S)': df_forecast['เวรบ่าย (S)'].min(),
-            'เวรดึก (N)': df_forecast['เวรดึก (N)'].min()
-        }
-        max_row = {
-            'เดือน': '📈 Max',
-            'วันในเดือน': df_forecast['วันในเดือน'].max(),
-            'ส-อา': df_forecast['ส-อา'].max(),
-            'นักขัตฤกษ์': df_forecast['นักขัตฤกษ์'].max(),
-            'วันทำงาน': df_forecast['วันทำงาน'].max(),
-            'รวมเวร': df_forecast['รวมเวร'].max(),
-            'เวรเช้า (M)': df_forecast['เวรเช้า (M)'].max(),
-            'เวรบ่าย (S)': df_forecast['เวรบ่าย (S)'].max(),
-            'เวรดึก (N)': df_forecast['เวรดึก (N)'].max()
-        }
-        
-        # รวม dataframe
-        df_with_summary = pd.concat([df_forecast, pd.DataFrame([min_row, max_row])], ignore_index=True)
-        
         # แสดงตาราง
-        st.dataframe(df_with_summary, use_container_width=True, hide_index=True)
+        st.dataframe(df_forecast, use_container_width=True, hide_index=True)
         
         # สรุปทั้งปี
         st.markdown("---")
@@ -2777,5 +2754,5 @@ if st.session_state.schedule_df is not None:
             avg_work_per_month = round(total_year_workdays / 12, 1)
             st.metric("⌀ เฉลี่ย/เดือน", f"{avg_work_per_month} วัน")
         with col_y4:
-            total_shifts = sum(d['เวรเช้า (M)'] + d['เวรบ่าย (S)'] + d['เวรดึก (N)'] for d in yearly_forecast)
-            st.metric("📊 เวรรวม/คน/ปี", f"~{total_shifts:.0f} เวร")
+            total_shifts_year = sum(d['รวมเวร'] for d in yearly_forecast)
+            st.metric("📊 เวรรวม/คน/ปี", f"~{total_shifts_year} เวร")
