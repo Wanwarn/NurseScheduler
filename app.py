@@ -296,6 +296,141 @@ def save_staffing_overrides_to_gsheet():
             st.info("ℹ️ ไม่มี Staffing Override ใหม่ที่ต้องบันทึก")
     except Exception as e: st.error(f"Error saving staffing overrides: {e}")
 
+# --- SummaryLog (Monthly Summary Report) ---
+def ensure_summary_log_sheet():
+    """สร้าง Worksheet 'SummaryLog' ถ้ายังไม่มี"""
+    try:
+        sh = connect_gsheet()
+        if not sh:
+            return None
+        try:
+            ws = sh.worksheet("SummaryLog")
+        except:
+            # สร้าง worksheet ใหม่พร้อม header
+            ws = sh.add_worksheet(title="SummaryLog", rows=100, cols=15)
+            headers = ['Timestamp', 'Month', 'Year', 'Nurse', 'WorkDays', 
+                       'Shift_M', 'Shift_S', 'Shift_N', 'Shift_NS']
+            ws.update(values=[headers], range_name='A1')
+        return ws
+    except Exception as e:
+        st.error(f"❌ Error with SummaryLog sheet: {e}")
+        return None
+
+def calculate_nurse_summary(schedule_df, year, month, days_in_month):
+    """คำนวณยอดรวมของพยาบาลทุกคนในเดือน"""
+    summary_data = []
+    timestamp = get_thai_time()
+    
+    for _, row in schedule_df.iterrows():
+        nurse = row.get('Nurse', row.iloc[0])
+        
+        # ดึง shifts ทั้งหมดในเดือน
+        shifts = []
+        for d in range(1, days_in_month + 1):
+            col_name = str(d)
+            shift_val = ''
+            # ลองหา column ที่ตรงกัน (อาจมี emoji นำหน้า)
+            for prefix in ['🟡', '🔵', '']:
+                possible_col = f"{prefix}{d}"
+                if possible_col in row.index:
+                    shift_val = str(row[possible_col])
+                    break
+                elif col_name in row.index:
+                    shift_val = str(row[col_name])
+                    break
+            shifts.append(shift_val)
+        
+        # นับเวรแต่ละประเภท
+        c_m = shifts.count('M')
+        c_s = shifts.count('S')
+        c_n = shifts.count('N')
+        c_ns = shifts.count('NS')
+        c_lt = sum(1 for s in shifts if 'ลา' in s or 'อบรม' in s)
+        
+        # WorkDays = จำนวนวันที่ทำงานทั้งหมด (รวม M, S, N, NS, ลา)
+        work_days = c_m + c_s + c_n + c_ns + c_lt
+        
+        summary_data.append({
+            'timestamp': timestamp,
+            'month': month,
+            'year': year,
+            'nurse': nurse,
+            'work_days': work_days,
+            'shift_m': c_m,
+            'shift_s': c_s,
+            'shift_n': c_n,
+            'shift_ns': c_ns
+        })
+    
+    return summary_data
+
+def save_summary_to_gsheet(summary_data, year, month):
+    """บันทึก Summary ลง SummaryLog (ลบข้อมูลเดิมถ้ามี month/year ซ้ำ)"""
+    try:
+        ws = ensure_summary_log_sheet()
+        if not ws:
+            return False
+        
+        # อ่านข้อมูลทั้งหมด
+        all_data = ws.get_all_values()
+        if len(all_data) > 1:
+            header = all_data[0]
+            month_idx = header.index('Month') if 'Month' in header else 1
+            year_idx = header.index('Year') if 'Year' in header else 2
+            
+            # หาแถวที่ต้องลบ (ข้อมูลเดิมของ month/year นี้)
+            rows_to_keep = [all_data[0]]  # เก็บ header
+            deleted_count = 0
+            for row in all_data[1:]:
+                if len(row) > max(month_idx, year_idx):
+                    try:
+                        if int(row[month_idx]) == month and int(row[year_idx]) == year:
+                            deleted_count += 1
+                            continue  # ไม่เก็บแถวนี้ (ลบออก)
+                    except:
+                        pass
+                rows_to_keep.append(row)
+            
+            # ล้างและเขียนใหม่ถ้ามีการลบ
+            if deleted_count > 0:
+                ws.clear()
+                if rows_to_keep:
+                    ws.update(values=rows_to_keep, range_name='A1')
+                st.info(f"🔄 ลบข้อมูลเดิมของเดือน {month}/{year} ออก {deleted_count} แถว แล้วบันทึกใหม่")
+        
+        # เพิ่มข้อมูลใหม่
+        next_row = len(ws.get_all_values()) + 1
+        data_rows = []
+        for s in summary_data:
+            data_rows.append([
+                s['timestamp'], s['month'], s['year'], s['nurse'],
+                s['work_days'], s['shift_m'], s['shift_s'], s['shift_n'], s['shift_ns']
+            ])
+        
+        if data_rows:
+            ws.update(values=data_rows, range_name=f'A{next_row}')
+        
+        return True
+    except Exception as e:
+        st.error(f"❌ Error saving summary: {e}")
+        return False
+
+def load_summary_from_gsheet():
+    """โหลดข้อมูล Summary ทั้งหมดจาก SummaryLog"""
+    try:
+        sh = connect_gsheet()
+        if not sh:
+            return None
+        try:
+            ws = sh.worksheet("SummaryLog")
+            records = ws.get_all_records()
+            return records
+        except:
+            return None
+    except Exception as e:
+        st.error(f"❌ Error loading summary: {e}")
+        return None
+
 # --- Previous Schedule (Load/Save) ---
 def load_previous_schedule_from_gsheet(nurses):
     """ดึงตารางเวรเดือนก่อนจาก Google Sheets (Sheet: PreviousSchedule)"""
@@ -445,11 +580,17 @@ def save_schedule_to_gsheet(schedule_df, year, month):
         ws.clear()
         ws.update(values=data, range_name='A1')
         
+        # บันทึก Summary ด้วย
+        summary_data = calculate_nurse_summary(schedule_df, year, month, days_in_month)
+        if save_summary_to_gsheet(summary_data, year, month):
+            st.success("✅ บันทึกสรุปยอดรายเดือนเรียบร้อย!")
+        
         return True
         
     except Exception as e:
         st.error(f"❌ Error saving schedule to GSheet: {e}")
         return False
+
 
 # --- Helper Function ---
 def get_week_occurrence(day):
@@ -2103,7 +2244,7 @@ with st.sidebar:
 
 # --- Main Content ---
 if st.session_state.schedule_df is not None:
-    tab1, tab2, tab3, tab4 = st.tabs(["📅 ตารางเวร", "💰 ค่าตอบแทนและค่าเวร", "📅 ปฏิทินวันหยุด", "📊 คะแนน"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📅 ตารางเวร", "💰 ค่าตอบแทนและค่าเวร", "📅 ปฏิทินวันหยุด", "📊 คะแนน", "📈 สรุปภาพรวมรายปี"])
     
     with tab1:
         st.subheader(f"ตารางเวรเดือน {month}/{year}")
@@ -2401,3 +2542,134 @@ if st.session_state.schedule_df is not None:
                     avg_fix = sum(fix_rates) / len(fix_rates)
                     st.metric("⌀ Fix Request สำเร็จ", f"{avg_fix:.0f}%")
                     st.caption(f"ต่ำสุด: {min(fix_rates):.0f}%, สูงสุด: {max(fix_rates):.0f}%")
+
+    with tab5:
+        st.subheader("📈 สรุปภาพรวมรายปี")
+        st.caption("แสดงข้อมูลสรุปจากทุกเดือนที่บันทึกไว้ใน Google Sheet")
+        
+        # โหลดข้อมูลจาก SummaryLog
+        with st.spinner("กำลังโหลดข้อมูล..."):
+            summary_records = load_summary_from_gsheet()
+        
+        if summary_records and len(summary_records) > 0:
+            df_summary = pd.DataFrame(summary_records)
+            
+            # ตรวจสอบ columns ที่มี
+            st.markdown("---")
+            
+            # ตัวเลือกดูข้อมูล
+            view_option = st.selectbox(
+                "📊 เลือกดูยอด:",
+                ["WorkDays", "Shift_M", "Shift_S", "Shift_N", "Shift_NS"],
+                format_func=lambda x: {
+                    "WorkDays": "📊 วันทำงานทั้งหมด",
+                    "Shift_M": "🌅 เวรเช้า (M)",
+                    "Shift_S": "🌆 เวรบ่าย (S)",
+                    "Shift_N": "🌙 เวรดึก (N)",
+                    "Shift_NS": "🌙🌆 เวร NS"
+                }.get(x, x)
+            )
+            
+            # สร้าง Pivot Table
+            if 'Month' in df_summary.columns and 'Year' in df_summary.columns:
+                df_summary['Month_Year'] = df_summary['Month'].astype(str) + '/' + df_summary['Year'].astype(str)
+                
+                # เลือก column ที่จะแสดง
+                value_col = view_option
+                
+                if value_col in df_summary.columns and 'Nurse' in df_summary.columns:
+                    try:
+                        # แปลงเป็น numeric
+                        df_summary[value_col] = pd.to_numeric(df_summary[value_col], errors='coerce').fillna(0)
+                        
+                        pivot_df = df_summary.pivot_table(
+                            index='Nurse',
+                            columns='Month_Year',
+                            values=value_col,
+                            aggfunc='sum',
+                            fill_value=0
+                        )
+                        
+                        st.markdown("### 📋 ตาราง Pivot (แถว = พยาบาล, คอลัมน์ = เดือน/ปี)")
+                        st.dataframe(pivot_df, use_container_width=True)
+                        
+                        # ===== สรุปเฉลี่ยเวรในแต่ละเดือน =====
+                        st.markdown("---")
+                        st.markdown("### 📊 สรุปเฉลี่ยเวรในแต่ละเดือน")
+                        
+                        # แปลง columns อื่นๆ เป็น numeric
+                        for col in ['WorkDays', 'Shift_M', 'Shift_S', 'Shift_N', 'Shift_NS']:
+                            if col in df_summary.columns:
+                                df_summary[col] = pd.to_numeric(df_summary[col], errors='coerce').fillna(0)
+                        
+                        # สร้างตารางสรุปเฉลี่ยต่อเดือน
+                        monthly_avg = df_summary.groupby('Month_Year').agg({
+                            'WorkDays': 'mean',
+                            'Shift_M': 'mean',
+                            'Shift_S': 'mean',
+                            'Shift_N': 'mean',
+                            'Shift_NS': 'mean'
+                        }).round(1)
+                        
+                        # เปลี่ยนชื่อ columns เป็นภาษาไทย
+                        monthly_avg.columns = ['วันทำงาน', 'เวรเช้า (M)', 'เวรบ่าย (S)', 'เวรดึก (N)', 'เวร NS']
+                        monthly_avg.index.name = 'เดือน/ปี'
+                        
+                        # จัดเรียงตามเดือน
+                        try:
+                            # แยก month และ year เพื่อเรียงลำดับ
+                            monthly_avg = monthly_avg.reset_index()
+                            monthly_avg['sort_key'] = monthly_avg['เดือน/ปี'].apply(
+                                lambda x: int(x.split('/')[1]) * 100 + int(x.split('/')[0])
+                            )
+                            monthly_avg = monthly_avg.sort_values('sort_key').drop('sort_key', axis=1)
+                            monthly_avg = monthly_avg.set_index('เดือน/ปี')
+                        except:
+                            pass
+                        
+                        st.dataframe(monthly_avg, use_container_width=True)
+                        
+                        # Bar Chart
+                        st.markdown("### 📊 กราฟเปรียบเทียบภาระงาน")
+                        
+                        # เลือกเดือนสำหรับกราฟ
+                        available_months = sorted(df_summary['Month_Year'].unique().tolist())
+                        if available_months:
+                            selected_month = st.selectbox("🗓️ เลือกเดือนสำหรับกราฟ:", available_months, index=len(available_months)-1)
+                            
+                            chart_data = df_summary[df_summary['Month_Year'] == selected_month][['Nurse', value_col]].copy()
+                            chart_data = chart_data.sort_values(by=value_col, ascending=False)
+                            
+                            if not chart_data.empty:
+                                st.bar_chart(chart_data.set_index('Nurse'))
+                                
+                                # แสดงสถิติ
+                                col_stat1, col_stat2, col_stat3 = st.columns(3)
+                                with col_stat1:
+                                    st.metric("📈 สูงสุด", f"{chart_data[value_col].max():.0f}")
+                                with col_stat2:
+                                    st.metric("📉 ต่ำสุด", f"{chart_data[value_col].min():.0f}")
+                                with col_stat3:
+                                    st.metric("⌀ เฉลี่ย", f"{chart_data[value_col].mean():.1f}")
+                            else:
+                                st.warning("ไม่มีข้อมูลสำหรับเดือนที่เลือก")
+                        else:
+                            st.info("ยังไม่มีข้อมูลเดือนที่บันทึก")
+                    except Exception as e:
+                        st.error(f"❌ Error creating pivot: {e}")
+                        st.dataframe(df_summary)
+                else:
+                    st.warning(f"ไม่พบ column '{value_col}' หรือ 'Nurse' ในข้อมูล")
+                    st.write("Columns ที่มี:", df_summary.columns.tolist())
+            else:
+                st.warning("ไม่พบ column 'Month' หรือ 'Year' ในข้อมูล")
+                st.dataframe(df_summary)
+        else:
+            st.info("ℹ️ ยังไม่มีข้อมูลสรุป กรุณาบันทึกตารางเวรไปยัง Google Sheet ก่อน")
+            st.markdown("""
+            **วิธีใช้งาน:**
+            1. สร้างตารางเวรในแท็บ "📅 ตารางเวร"
+            2. กดปุ่ม "☁️ บันทึกไป GSheet" เพื่อบันทึกลง Google Sheet
+            3. ระบบจะบันทึกสรุปยอดอัตโนมัติลงใน Sheet "SummaryLog"
+            4. กลับมาดูที่แท็บนี้เพื่อดูภาพรวมรายปี
+            """)
