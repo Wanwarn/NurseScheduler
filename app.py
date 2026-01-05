@@ -153,23 +153,27 @@ def save_requests_to_gsheet():
         existing_records = ws.get_all_records()
         existing_records = [r for r in existing_records if r.get('nurse') and str(r.get('nurse')).strip()]  # ข้ามแถวที่ nurse ว่าง
         
-        # 2. สร้าง set ของข้อมูลที่มีอยู่แล้ว (nurse, date, month, year) เพื่อเช็ค duplicate
+        # 2. สร้าง set ของข้อมูลที่มีอยู่แล้ว (nurse, date, month, year, type) เพื่อเช็ค duplicate
         existing_keys = set()
         for r in existing_records:
-            key = (str(r.get('nurse', '')), str(r.get('date', '')), str(r.get('month', '')), str(r.get('year', '')))
+            # เพิ่ม type ใน key เพื่อให้เช็ค duplicate แม่นยำขึ้น
+            key = (str(r.get('nurse', '')), str(r.get('date', '')), str(r.get('month', '')), str(r.get('year', '')), str(r.get('type', '')))
             existing_keys.add(key)
         
         # 3. หาข้อมูลใหม่ที่ยังไม่มีใน Sheet
         new_records = []
         for req in st.session_state.requests:
-            key = (str(req.get('nurse', '')), str(req.get('date', '')), str(req.get('month', '')), str(req.get('year', '')))
+            key = (str(req.get('nurse', '')), str(req.get('date', '')), str(req.get('month', '')), str(req.get('year', '')), str(req.get('type', '')))
             if key not in existing_keys:
                 new_records.append(req)
                 existing_keys.add(key)  # ป้องกัน duplicate ในรอบเดียวกัน
         
         # 4. ถ้ามีข้อมูลใหม่ ให้ append ต่อท้าย
         if new_records:
-            next_row = len(existing_records) + 2  # +1 for header, +1 for 0-index
+            # ใช้ get_all_values เพื่อหาแถวสุดท้ายที่มี data จริงๆ (รวมแถวว่าง)
+            all_values = ws.get_all_values()
+            next_row = len(all_values) + 1  # +1 เพราะ append หลังแถวสุดท้าย
+            
             data = []
             for req in new_records:
                 row = [
