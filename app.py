@@ -86,10 +86,24 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/1js5h70Abv1MIKrmZUBe3xypoCE4
 CREDENTIALS_FILE = "service_account.json"
 
 def connect_gsheet():
-    """เชื่อมต่อกับ Google Sheets"""
+    """เชื่อมต่อกับ Google Sheets (รองรับทั้ง local และ Streamlit Cloud)"""
     try:
-        creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, SCOPE)
-        client = gspread.authorize(creds)
+        # วิธีที่ 1: ใช้ Streamlit Cloud Secrets (สำหรับ deploy บน cloud)
+        if hasattr(st, 'secrets') and 'gcp_service_account' in st.secrets:
+            from google.oauth2.service_account import Credentials
+            creds = Credentials.from_service_account_info(
+                st.secrets["gcp_service_account"],
+                scopes=SCOPE
+            )
+            client = gspread.authorize(creds)
+        # วิธีที่ 2: ใช้ไฟล์ service_account.json (สำหรับรันบนเครื่อง local)
+        elif os.path.exists(CREDENTIALS_FILE):
+            creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, SCOPE)
+            client = gspread.authorize(creds)
+        else:
+            st.error("❌ ไม่พบ credentials! กรุณาตั้งค่า Secrets หรือใส่ไฟล์ service_account.json")
+            return None
+        
         sheet = client.open_by_url(SHEET_URL)
         return sheet
     except Exception as e:
