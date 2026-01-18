@@ -16,11 +16,12 @@ def get_thai_time():
 # --- Thai Public Holidays 2025-2026 ---
 THAI_HOLIDAYS = {
     2025: {
-        1: [1],           # วันขึ้นปีใหม่
+        1: [1, 29],       # วันขึ้นปีใหม่ + ตรุษจีน
         2: [12],          # วันมาฆบูชา
+        3: [31],          # วันอีดิลฟิตรี
         4: [6, 7, 13, 14, 15, 16],  # วันจักรี + สงกรานต์
         5: [1, 4, 5, 12], # วันแรงงาน + ฉัตรมงคล + วิสาขบูชา
-        6: [2, 3],        # วันเฉลิมฯ พระราชินี
+        6: [2, 3, 7],     # วันเฉลิมฯ พระราชินี + อีดิลอัฏฮา
         7: [10, 11, 28],  # วันอาสาฬหบูชา + เข้าพรรษา + เฉลิมฯ ร.10
         8: [11, 12],      # วันแม่แห่งชาติ
         10: [13, 23],     # วันสวรรคต ร.9 + ปิยมหาราช
@@ -28,9 +29,10 @@ THAI_HOLIDAYS = {
     },
     2026: {
         1: [1, 2],        # วันขึ้นปีใหม่
-        3: [3],           # วันมาฆบูชา
+        2: [17],          # ตรุษจีน
+        3: [3, 20],       # วันมาฆบูชา + อีดิลฟิตรี
         4: [6, 13, 14, 15],  # วันจักรี + สงกรานต์
-        5: [1, 4],        # วันแรงงาน + ฉัตรมงคล
+        5: [1, 4, 27],    # วันแรงงาน + ฉัตรมงคล + อีดิลอัฏฮา
         6: [1, 3],        # วันวิสาขบูชา (ชดเชย) + เฉลิมฯ พระราชินี
         7: [28, 29, 30],  # เฉลิมฯ ร.10 + อาสาฬหบูชา + เข้าพรรษา
         8: [12],          # วันแม่แห่งชาติ
@@ -1191,6 +1193,15 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
     er7_m_shifts = []
     er7_sn_shifts = []
 
+    # สร้าง set ของวันที่ ER1 ขอลา (เพื่อเช็ควันศุกร์)
+    er1_leave_days = set()
+    for req in requests:
+        req_month = req.get('month', month)
+        req_year = req.get('year', year)
+        if req_month == month and req_year == year:
+            if req.get('nurse') == 'ER1' and req.get('type') in ['Leave_Train', 'Leave', 'Train']:
+                er1_leave_days.add(req.get('date'))
+    
     for d in range(1, days_in_month + 1):
         wd = calendar.weekday(year, month, d)
         week_occurrence = get_week_occurrence(d)
@@ -1201,8 +1212,11 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
             model.Add(shifts_var[('ER1', d, 'O')] == 1)
         elif wd in [0, 1, 2, 3]:  # จ-พฤ = NCD (แสดงเป็น O ในตาราง)
             model.Add(shifts_var[('ER1', d, 'O')] == 1)
-        elif wd == 4:  # ศุกร์ = M
-            model.Add(shifts_var[('ER1', d, 'M')] == 1)
+        elif wd == 4:  # ศุกร์
+            # ถ้า ER1 ลาวันศุกร์นี้ → ไม่บังคับ M (จะถูกบังคับ L_T ในส่วน requests ด้านล่าง)
+            # ระบบจะจัดคนอื่นมาทำเวร M แทนให้ครบ 3 คน
+            if d not in er1_leave_days:
+                model.Add(shifts_var[('ER1', d, 'M')] == 1)
 
         # ER3 (Soft Fix): วันพุธ พฤหัส ทุกสัปดาห์ (เท่าที่ได้ ไม่เบียดเบียนผู้อื่น)
         if wd in [2, 3]:  # วันพุธ = 2, วันพฤหัส = 3
