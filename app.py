@@ -149,6 +149,13 @@ def load_requests_from_gsheet():
         # แปลงชื่อ nurse กลับเป็นรหัส ER และเพิ่ม timestamp ถ้าไม่มี
         for r in records:
             r['nurse'] = extract_nurse_id(r.get('nurse'))
+            # แปลง date, month, year เป็น int เพื่อให้เปรียบเทียบได้ถูกต้อง
+            try:
+                r['date'] = int(r.get('date', 0))
+                r['month'] = int(r.get('month', 0))
+                r['year'] = int(r.get('year', 0))
+            except (ValueError, TypeError):
+                pass  # เก็บค่าเดิมถ้าแปลงไม่ได้
             # ถ้า timestamp ว่างหรือไม่มี ให้ใส่เวลาที่ดึงข้อมูล
             if not r.get('timestamp'):
                 r['timestamp'] = f"(synced: {sync_time})"
@@ -225,6 +232,12 @@ def load_fix_requests_from_gsheet():
                 r['dates'] = [int(x) for x in r['dates'].split(',')]
             elif isinstance(r.get('dates'), int):
                 r['dates'] = [r['dates']]
+            # แปลง month, year เป็น int เพื่อให้เปรียบเทียบได้ถูกต้อง
+            try:
+                r['month'] = int(r.get('month', 0))
+                r['year'] = int(r.get('year', 0))
+            except (ValueError, TypeError):
+                pass
             # ถ้า timestamp ว่างหรือไม่มี ให้ใส่เวลาที่ดึงข้อมูล
             if not r.get('timestamp'):
                 r['timestamp'] = f"(synced: {sync_time})"
@@ -277,7 +290,18 @@ def load_staffing_overrides_from_gsheet():
     try:
         sh = connect_gsheet()
         if not sh: return []
-        return sh.worksheet("StaffingOverrides").get_all_records()
+        records = sh.worksheet("StaffingOverrides").get_all_records()
+        # แปลง type เป็น int เพื่อให้เปรียบเทียบได้ถูกต้อง
+        for r in records:
+            try:
+                r['start'] = int(r.get('start', 1))
+                r['end'] = int(r.get('end', 31))
+                r['count'] = int(r.get('count', 1))
+                r['month'] = int(r.get('month', 0))
+                r['year'] = int(r.get('year', 0))
+            except (ValueError, TypeError):
+                pass
+        return records
     except: return []
 
 def save_staffing_overrides_to_gsheet():
