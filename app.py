@@ -470,7 +470,28 @@ def load_summary_from_gsheet():
         try:
             ws = sh.worksheet("SummaryLog")
             records = ws.get_all_records()
-            return records
+            
+            # Normalize column names: แปลง shift_M → Shift_M, shift_S → Shift_S, etc.
+            column_mapping = {
+                'shift_m': 'Shift_M', 'shift_M': 'Shift_M',
+                'shift_s': 'Shift_S', 'shift_S': 'Shift_S',
+                'shift_n': 'Shift_N', 'shift_N': 'Shift_N',
+                'shift_ns': 'Shift_NS', 'shift_NS': 'Shift_NS',
+                'workdays': 'WorkDays', 'work_days': 'WorkDays',
+                'nurse': 'Nurse', 'month': 'Month', 'year': 'Year',
+                'timestamp': 'Timestamp', 'month_year': 'Month_Year'
+            }
+            
+            normalized_records = []
+            for record in records:
+                new_record = {}
+                for key, value in record.items():
+                    # ถ้ามี mapping ก็ใช้ชื่อใหม่ ไม่มีก็ใช้ชื่อเดิม
+                    new_key = column_mapping.get(key.lower(), key)
+                    new_record[new_key] = value
+                normalized_records.append(new_record)
+            
+            return normalized_records
         except:
             return None
     except Exception as e:
