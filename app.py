@@ -7,7 +7,7 @@ from datetime import datetime
 import pytz
 
 # --- App Version ---
-APP_VERSION = "2.4.8"  # อัปเดต: 2026-02-01 - OT fairness (NS ±1)
+APP_VERSION = "2.4.9"  # อัปเดต: 2026-02-01 - OT=NS (1 NS = 1 OT)
 
 # --- Thai Timezone Helper ---
 def get_thai_time():
@@ -1456,22 +1456,23 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
             model.Add(n_shifts_per_nurse[n1] - n_shifts_per_nurse[n2] <= 1)
     
     # ==========================================
-    # 4.1 เกลี่ย OT (NS*2) ให้เท่ากัน ±1
+    # 4.1 เกลี่ย OT (NS) ให้เท่ากัน ±1
     # ==========================================
-    # OT คำนวณจาก NS เพราะ NS นับเป็น 2 เวร (S+N = OT 1 วัน)
+    # OT = เมื่อทำงาน > 8 ชม./วัน
+    # NS = 16 ชม. (S+N) = 1 OT (ไม่ใช่ 2 OT)
     # ยกเว้น ER1 (ไม่ทำ NS) และ ER7 (มี contract พิเศษ)
     nurses_for_ot_fairness = [n for n in nurses if n not in ['ER1', 'ER7']]
     ot_per_nurse = {}
     
     for n in nurses_for_ot_fairness:
-        # OT = จำนวน NS * 2 (เพราะ NS counts as 2 shifts)
-        ot_per_nurse[n] = sum(shifts_var[(n, d, 'NS')] for d in range(1, days_in_month + 1)) * 2
+        # OT = จำนวน NS (เพราะ NS 16 ชม. = 1 OT)
+        ot_per_nurse[n] = sum(shifts_var[(n, d, 'NS')] for d in range(1, days_in_month + 1))
     
-    # เกลี่ย OT ต่างกันไม่เกิน 2 (เพราะ NS 1 เวร = OT 2)
+    # เกลี่ย OT ต่างกันไม่เกิน 1
     for n1 in nurses_for_ot_fairness:
         for n2 in nurses_for_ot_fairness:
             if n1 == n2: continue
-            model.Add(ot_per_nurse[n1] - ot_per_nurse[n2] <= 2)
+            model.Add(ot_per_nurse[n1] - ot_per_nurse[n2] <= 1)
 
     # ==========================================
     # 5. Soft Constraint: หลัง N ควร Off 2 วัน (ยกเว้น ER3)
