@@ -1505,8 +1505,8 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         sum(ns_penalty) * 500 -  # หักหนักๆ ถ้าเกิน NS quota
         sum(s_o_n_penalty) * 35 -  # Penalty สำหรับ S-O-N (เสียวันหยุดฟรี)
         sum(seven_day_streak_penalty) * 45 -  # Penalty สำหรับทำงาน 7 วันติด
-        sum(work_days_diff) * 50 -  # หักคะแนนถ้าวันทำงานไม่ตรงเป้า
-        er7_m_diff * 1000  # [ER7] บังคับให้เข้าเป้า 10 (หักหนักมากถ้าพลาด)
+        sum(work_days_diff) * 50  # หักคะแนนถ้าวันทำงานไม่ตรงเป้า
+        # [ER7] M+ลา=10 เปลี่ยนเป็น Hard Constraint แล้ว ไม่ต้องหักคะแนน
     )
 
     # Solve
