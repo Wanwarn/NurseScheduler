@@ -1526,7 +1526,9 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
                         if s == 'OC': display = "📞OC"  # แสดง On-Call
                         if n == 'ER1' and s == 'O': 
                             wd = calendar.weekday(year, month, d)
-                            if wd in [0, 1, 2, 3]: display = "NCD"
+                            # แสดง NCD เฉพาะวันจ-พฤ ที่ไม่ใช่วันหยุดนักขัตฤกษ์
+                            if wd in [0, 1, 2, 3] and not is_holiday(year, month, d):
+                                display = "NCD"
                         row[str(d)] = display
                         break
             schedule_data.append(row)
