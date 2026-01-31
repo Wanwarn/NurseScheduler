@@ -1279,14 +1279,16 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         er7_sn_shifts.append(shifts_var[('ER7', d, 'NS')])  # นับเป็น N
 
     # ==========================================
-    # [FIXED] ER7 Contract: เช้า 10, บ่าย+ดึก <= 10
+    # [FIXED] ER7 Contract: เช้า 10, บ่าย+ดึก = 10, รวม 20 เวร
     # ==========================================
     er7_lt_shifts = [shifts_var[('ER7', d, 'L_T')] for d in range(1, days_in_month + 1)]
+    er7_ns_shifts = [shifts_var[('ER7', d, 'NS')] for d in range(1, days_in_month + 1)]
     
     # รวมผลรวมเวรต่างๆ ของ ER7
     er7_total_m = sum(er7_m_shifts)
     er7_total_lt = sum(er7_lt_shifts)  # วันลา/อบรม (นับรวมในโควตาเช้า)
-    er7_total_sn = sum(er7_sn_shifts)  # บ่าย + ดึก
+    er7_total_sn = sum(er7_sn_shifts)  # บ่าย + ดึก + NS*2
+    er7_total_ns = sum(er7_ns_shifts)  # NS เพื่อใช้ในการนับ N ทั้งหมด
     
     # --- กฎข้อที่ 1: เวรเช้า + ลา ต้องเท่ากับ 10 ---
     # ใช้ Soft Constraint (หักคะแนน) แทน Hard Constraint (บังคับ)
@@ -1295,14 +1297,15 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
     # คำนวณส่วนต่างจาก 10 (เช่น ถ้าได้ 10 คือ 0, ถ้าได้ 9 หรือ 11 คือ 1)
     model.AddAbsEquality(er7_m_diff, (er7_total_m + er7_total_lt) - 10)
     
-    # --- กฎข้อที่ 2: บ่าย + ดึก ห้ามเกิน 10 ---
-    model.Add(er7_total_sn <= 10)
+    # --- กฎข้อที่ 2: บ่าย + ดึก + NS*2 ต้องเท่ากับ 10 (Hard Constraint) ---
+    model.Add(er7_total_sn == 10)
     
-    # --- กฎข้อที่ 3: ดึกล้วน ห้ามเกิน 4 (เหมือนเดิม) ---
+    # --- กฎข้อที่ 3: N ทั้งหมด (N + NS) ห้ามเกิน 4 ---
+    # NS นับเป็น N ด้วย เพราะ NS = S+N (16 ชม.)
     er7_n_shifts = [shifts_var[('ER7', d, 'N')] for d in range(1, days_in_month + 1)]
-    model.Add(sum(er7_n_shifts) <= 4)  # N ไม่เกิน 4
+    model.Add(sum(er7_n_shifts) + er7_total_ns <= 4)  # N + NS ≤ 4
     
-    print(f"[ER7] Contract Fixed: M+ลา=10, S+N+NS*2<=10, N<=4")  # Debug
+    print(f"[ER7] Contract: M+ลา=10, S+N+NS*2=10, N+NS<=4, Total=20")
 
     # ==========================================
     # 2.1 ขอเวร Fix จาก UI (Dynamic Shift Fix Requests)
