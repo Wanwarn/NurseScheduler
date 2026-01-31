@@ -7,7 +7,7 @@ from datetime import datetime
 import pytz
 
 # --- App Version ---
-APP_VERSION = "2.4.5"  # อัปเดต: 2026-02-01 - ER7 Contract, ER1 Holiday fix, NS=2
+APP_VERSION = "2.4.6"  # อัปเดต: 2026-02-01 - ER7 M+ลา=10 Hard Constraint
 
 # --- Thai Timezone Helper ---
 def get_thai_time():
@@ -1293,12 +1293,8 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
     er7_total_sn = sum(er7_sn_shifts)  # บ่าย + ดึก + NS*2
     er7_total_ns = sum(er7_ns_shifts)  # NS เพื่อใช้ในการนับ N ทั้งหมด
     
-    # --- กฎข้อที่ 1: เวรเช้า + ลา ต้องเท่ากับ 10 ---
-    # ใช้ Soft Constraint (หักคะแนน) แทน Hard Constraint (บังคับ)
-    # เพื่อป้องกัน Infeasible (เผื่อบางกรณีจำเป็นต้องขยับเป็น 9 หรือ 11)
-    er7_m_diff = model.NewIntVar(0, 10, 'er7_m_diff')
-    # คำนวณส่วนต่างจาก 10 (เช่น ถ้าได้ 10 คือ 0, ถ้าได้ 9 หรือ 11 คือ 1)
-    model.AddAbsEquality(er7_m_diff, (er7_total_m + er7_total_lt) - 10)
+    # --- กฎข้อที่ 1: เวรเช้า + ลา ต้องเท่ากับ 10 (Hard Constraint) ---
+    model.Add(er7_total_m + er7_total_lt == 10)
     
     # --- กฎข้อที่ 2: บ่าย + ดึก + NS*2 ต้องเท่ากับ 10 (Hard Constraint) ---
     model.Add(er7_total_sn == 10)
