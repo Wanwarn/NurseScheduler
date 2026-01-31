@@ -1403,12 +1403,11 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
     # ==========================================
     target_off_days = weekends + holidays_weekday  # ใช้ตัวแปรที่คำนวณไว้แล้วข้างบน
     
-    # กำหนดให้ทุกคน (ยกเว้น ER1) มีวันหยุดใกล้เคียงกับ target (±1)
+    # กำหนดให้ทุกคน (ยกเว้น ER1) มีวันหยุดตรง target พอดี
     for n in rotating_nurses:
         off_days = sum(shifts_var[(n, d, 'O')] for d in range(1, days_in_month + 1))
-        # RELAXED: Off อนุญาตให้ต่างจาก target ได้ ±1 วัน
-        model.Add(off_days >= target_off_days - 1)
-        model.Add(off_days <= target_off_days + 1)
+        # STRICT: Off ต้องเท่ากับ target พอดี (ไม่มี ±1)
+        model.Add(off_days == target_off_days)
     
     # ==========================================
     # 3.2 เกลี่ยวันหยุดพิเศษ (ส-อา + นักขัตฤกษ์) ให้ทุกคนได้หมุนเวียนเท่ากัน
