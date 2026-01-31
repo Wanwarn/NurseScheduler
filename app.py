@@ -1274,7 +1274,9 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         er7_m_shifts.append(shifts_var[('ER7', d, 'M')])
         er7_sn_shifts.append(shifts_var[('ER7', d, 'S')])
         er7_sn_shifts.append(shifts_var[('ER7', d, 'N')])
-        er7_sn_shifts.append(shifts_var[('ER7', d, 'NS')])  # NS นับเป็น OT ของ ER7
+        # NS นับเป็น 2 เวร: 1 S + 1 N (16 ชม. = บ่าย+ดึก)
+        er7_sn_shifts.append(shifts_var[('ER7', d, 'NS')])  # นับเป็น S
+        er7_sn_shifts.append(shifts_var[('ER7', d, 'NS')])  # นับเป็น N
 
     # ==========================================
     # [FIXED] ER7 Contract: เช้า 10, บ่าย+ดึก <= 10
@@ -1300,7 +1302,7 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
     er7_n_shifts = [shifts_var[('ER7', d, 'N')] for d in range(1, days_in_month + 1)]
     model.Add(sum(er7_n_shifts) <= 4)  # N ไม่เกิน 4
     
-    print(f"[ER7] Contract Fixed: M+ลา=10, S+N<=10, N<=4")  # Debug
+    print(f"[ER7] Contract Fixed: M+ลา=10, S+N+NS*2<=10, N<=4")  # Debug
 
     # ==========================================
     # 2.1 ขอเวร Fix จาก UI (Dynamic Shift Fix Requests)
