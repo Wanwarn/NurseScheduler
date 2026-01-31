@@ -1096,7 +1096,7 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
     # ==========================================
     # กฎเวร NS (บ่าย+ดึก 16 ชม.) - OT Shift (ลดความซับซ้อน)
     # ==========================================
-    nurses_for_ns = [n for n in nurses if n not in ['ER1', 'ER7']]  # ยกเว้น ER1, ER7
+    nurses_for_ns = [n for n in nurses if n not in ['ER1']]  # ยกเว้น ER1 เท่านั้น (ER7 ทำ NS ได้เมื่อมี OT)
     
     for n in nurses_for_ns:
         # NS ต้องห่างกันอย่างน้อย 4 วัน (ง่ายขึ้น)
@@ -1111,10 +1111,9 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
             for work_s in ['S', 'M', 'N', 'NS']:
                 model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 1, work_s)] <= 1)
     
-    # ER1 และ ER7 ห้ามทำ NS
+    # ER1 ห้ามทำ NS (ER7 ทำ NS ได้เมื่อมี OT)
     for d in range(1, days_in_month + 1):
         model.Add(shifts_var[('ER1', d, 'NS')] == 0)
-        model.Add(shifts_var[('ER7', d, 'NS')] == 0)
     
     # ==========================================
     # กระจาย NS ตาม ns_target (0, 1, หรือ 2 เวร/คน)
@@ -1275,6 +1274,7 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         er7_m_shifts.append(shifts_var[('ER7', d, 'M')])
         er7_sn_shifts.append(shifts_var[('ER7', d, 'S')])
         er7_sn_shifts.append(shifts_var[('ER7', d, 'N')])
+        er7_sn_shifts.append(shifts_var[('ER7', d, 'NS')])  # NS นับเป็น OT ของ ER7
 
     # ==========================================
     # [FIXED] ER7 Contract: เช้า 10, บ่าย+ดึก <= 10
