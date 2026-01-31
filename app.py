@@ -6,6 +6,9 @@ import os # อย่าลืม import os
 from datetime import datetime
 import pytz
 
+# --- App Version ---
+APP_VERSION = "2.4.5"  # อัปเดต: 2026-02-01 - ER7 Contract, ER1 Holiday fix, NS=2
+
 # --- Thai Timezone Helper ---
 def get_thai_time():
     """คืนค่าเวลาไทย (Asia/Bangkok) ไม่ว่าจะรันที่ไหนก็ตาม"""
@@ -1570,7 +1573,7 @@ if not check_password():
     st.stop()
 
 st.title("🏥 ระบบจัดตารางเวรพยาบาล (ER_KPH)")
-st.caption("**v2.4** | 🆕 ผ่อนคลาย Constraints | Debug ตารางคำขอ | ขอเวร Fix ผ่าน UI | 🔐 Protected")
+st.caption(f"**v{APP_VERSION}** | ER7 Contract | ER1 Holiday fix | NS=2 | 🔐 Protected")
 
 # Session State
 if 'schedule_df' not in st.session_state: st.session_state.schedule_df = None
