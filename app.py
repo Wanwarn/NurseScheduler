@@ -5,6 +5,14 @@ import calendar
 import os # อย่าลืม import os
 from datetime import datetime
 import pytz
+import logging
+
+# --- Logging Configuration ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # --- App Version ---
 APP_VERSION = "2.4.9"  # อัปเดต: 2026-02-01 - OT=NS (1 NS = 1 OT)
@@ -87,7 +95,8 @@ from oauth2client.service_account import ServiceAccountCredentials
 
 # ตั้งค่าการเชื่อมต่อ
 SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1js5h70Abv1MIKrmZUBe3xypoCE4BXIo6_gEhBuJ5k8k/edit?usp=sharing"
+# Load from secrets (fallback to hardcoded for backward compatibility)
+SHEET_URL = st.secrets.get("app", {}).get("sheet_url", "https://docs.google.com/spreadsheets/d/1js5h70Abv1MIKrmZUBe3xypoCE4BXIo6_gEhBuJ5k8k/edit?usp=sharing")
 CREDENTIALS_FILE = "service_account.json"
 
 def connect_gsheet():
@@ -106,12 +115,22 @@ def connect_gsheet():
             creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, SCOPE)
             client = gspread.authorize(creds)
         else:
+            logger.error("No credentials found")
             st.error("❌ ไม่พบ credentials! กรุณาตั้งค่า Secrets หรือใส่ไฟล์ service_account.json")
             return None
         
         sheet = client.open_by_url(SHEET_URL)
         return sheet
+    except gspread.exceptions.APIError as e:
+        logger.error(f"Google Sheets API error: {e}")
+        st.error(f"❌ Google API error: {e}")
+        return None
+    except gspread.exceptions.SpreadsheetNotFound as e:
+        logger.error(f"Spreadsheet not found: {e}")
+        st.error(f"❌ ไม่พบ Spreadsheet: {e}")
+        return None
     except Exception as e:
+        logger.exception(f"Unexpected error connecting to Google Sheets: {e}")
         st.error(f"❌ เชื่อมต่อ Google Sheets ไม่สำเร็จ: {e}")
         return None
 
@@ -163,7 +182,15 @@ def load_requests_from_gsheet():
             if not r.get('timestamp'):
                 r['timestamp'] = f"(synced: {sync_time})"
         return records
-    except: return []
+    except gspread.exceptions.WorksheetNotFound:
+        logger.warning("LeaveRequests worksheet not found")
+        return []
+    except gspread.exceptions.APIError as e:
+        logger.error(f"API error loading requests: {e}")
+        return []
+    except Exception as e:
+        logger.exception(f"Error loading requests: {e}")
+        return []
 
 def save_requests_to_gsheet():
     """บันทึกข้อมูลจาก session_state ไปยัง Google Sheet (รวมกับข้อมูลเดิม)"""
@@ -987,7 +1014,7 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
     target_work_days = days_in_month - (weekends + holidays_weekday)
     
     # แสดงค่าใน Terminal เพื่อเช็คความถูกต้อง
-    print(f"[TARGET] Month {month}/{year}: {days_in_month} days, holidays {weekends+holidays_weekday}, target work = {target_work_days} days")
+    logger.info(f"[TARGET] Month {month}/{year}: {days_in_month} days, holidays {weekends+holidays_weekday}, target work = {target_work_days} days")
     
     # ==========================================
     # 1. กฎพื้นฐานและกำลังคน (Hard Constraints)
@@ -1039,19 +1066,20 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
             model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'M')] + shifts_var[(n, d + 2, 'N')] <= 2)
             model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'M')] + shifts_var[(n, d + 2, 'NS')] <= 2)
     
-    # S -> O -> N (บ่าย -> หยุด -> ดึก = เสียวันหยุดฟรี) - SOFT CONSTRAINT
-    # เหตุผล: S เลิกเที่ยงคืน, O ไม่ได้พักจริง, N ต้องมาเที่ยงคืน
-    s_o_n_penalty = []
+    # S -> O -> N, NS -> O -> N (บ่าย/ดึก+บ่าย -> หยุด -> ดึก = เสียวันหยุดฟรี) - HARD CONSTRAINT
+    # เหตุผล: S/NS เลิกเที่ยงคืน, O ไม่ได้พักจริง, N ต้องมาเที่ยงคืน
+    # ห้ามเด็ดขาด: ต้องหยุดอย่างน้อย 2 วันก่อนทำดึก
+    s_o_n_penalty = []  # Keep empty for backward compatibility
     for n in nurses:
         for d in range(1, days_in_month - 1):
-            # สร้าง penalty แทน hard constraint
-            pen1 = model.NewBoolVar(f'son_pen_{n}_{d}')
-            model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'O')] + shifts_var[(n, d + 2, 'N')] <= 2 + pen1)
-            s_o_n_penalty.append(pen1)
-            
-            pen2 = model.NewBoolVar(f'sons_pen_{n}_{d}')
-            model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'O')] + shifts_var[(n, d + 2, 'NS')] <= 2 + pen2)
-            s_o_n_penalty.append(pen2)
+            # HARD: ห้าม S -> O -> N
+            model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'O')] + shifts_var[(n, d + 2, 'N')] <= 2)
+            # HARD: ห้าม S -> O -> NS
+            model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'O')] + shifts_var[(n, d + 2, 'NS')] <= 2)
+            # HARD: ห้าม NS -> O -> N
+            model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 1, 'O')] + shifts_var[(n, d + 2, 'N')] <= 2)
+            # HARD: ห้าม NS -> O -> NS
+            model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 1, 'O')] + shifts_var[(n, d + 2, 'NS')] <= 2)
 
     # ==========================================
     # กฎเวรดึก (N) เดี่ยว - ต้องทำงานก่อนดึก และหยุดหลังดึก
@@ -1134,28 +1162,27 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         ns_penalty.append(ns_excess)  # เอาไปหักคะแนนตอนท้าย
 
     # ==========================================
-    # ทำงานต่อเนื่อง: ห้ามเกิน 6 วันติด (HARD), ยอมให้ 7 วันถ้าจำเป็น (SOFT)
+    # ทำงานต่อเนื่อง: ห้ามเกิน 6 วันติด (HARD)
     # ==========================================
     seven_day_streak_penalty = []
     
     for n in nurses:
-        # กรณีปกติ: ตรวจสอบทุกช่วง 8 วันติดต่อกัน
-        for d in range(1, days_in_month - 6):  # d ถึง d+7 (8 วัน)
-            # HARD: ห้ามเกิน 7 วันทำงานใน 8 วันติดต่อกัน
-            model.Add(sum(sum(shifts_var[(n, d + k, s)] for s in work_shifts) for k in range(8)) <= 7)
-        
-        # เพิ่ม constraint สำหรับวันท้ายเดือน (เช็คย้อนหลัง)
-        for d in range(8, days_in_month + 1):
-            # ตรวจสอบ 8 วันย้อนหลัง (d-7 ถึง d)
-            model.Add(sum(sum(shifts_var[(n, d - k, s)] for s in work_shifts) for k in range(8)) <= 7)
-        
-        # SOFT: prefer ไม่เกิน 6 วันติด
+        # HARD: ห้ามเกิน 6 วันทำงานติดต่อกัน (ตรวจสอบทุกช่วง 7 วัน)
         for d in range(1, days_in_month - 5):  # d ถึง d+6 (7 วัน)
-            work_in_7_days = sum(sum(shifts_var[(n, d + k, s)] for s in work_shifts) for k in range(7))
-            is_7_day_streak = model.NewBoolVar(f'7day_streak_{n}_{d}')
-            model.Add(work_in_7_days <= 6 + is_7_day_streak)
-            model.Add(work_in_7_days >= 7 * is_7_day_streak)
-            seven_day_streak_penalty.append(is_7_day_streak)
+            # ใน 7 วันติดต่อกัน ต้องมีวันหยุดอย่างน้อย 1 วัน (= ทำงานได้สูงสุด 6 วัน)
+            model.Add(sum(sum(shifts_var[(n, d + k, s)] for s in work_shifts) for k in range(7)) <= 6)
+        
+        # เช็คท้ายเดือนด้วย (7 วันย้อนหลังจากวันสุดท้าย)
+        for d in range(max(7, days_in_month - 5), days_in_month + 1):
+            model.Add(sum(sum(shifts_var[(n, d - k, s)] for s in work_shifts) for k in range(7)) <= 6)
+        
+        # SOFT: prefer ไม่เกิน 5 วันติด (ให้คะแนนติดลบถ้าทำ 6 วันติด)
+        for d in range(1, days_in_month - 4):  # d ถึง d+5 (6 วัน)
+            work_in_6_days = sum(sum(shifts_var[(n, d + k, s)] for s in work_shifts) for k in range(6))
+            is_6_day_streak = model.NewBoolVar(f'6day_streak_{n}_{d}')
+            model.Add(work_in_6_days <= 5 + is_6_day_streak)
+            model.Add(work_in_6_days >= 6 * is_6_day_streak)
+            seven_day_streak_penalty.append(is_6_day_streak)
         
         # กรณีข้ามเดือน: วันที่ 1-7 ต้องรวมข้อมูลจากเดือนก่อน
         if prev_month_data and n in prev_month_data:
@@ -1304,7 +1331,7 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
     er7_n_shifts = [shifts_var[('ER7', d, 'N')] for d in range(1, days_in_month + 1)]
     model.Add(sum(er7_n_shifts) + er7_total_ns <= 4)  # N + NS ≤ 4
     
-    print(f"[ER7] Contract: M+ลา=10, S+N+NS*2=10, N+NS<=4, Total=20")
+    logger.info("[ER7] Contract: M+leave=10, S+N+NS*2=10, N+NS<=4, Total=20")
 
     # ==========================================
     # 2.1 ขอเวร Fix จาก UI (Dynamic Shift Fix Requests)
@@ -1374,11 +1401,11 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         model.AddAbsEquality(diff, total_work_per_nurse[n] - target_work_days)
         work_days_diff.append(diff)
 
-    # กฎบังคับ: เวรรวมห้ามต่างกันเกิน 1 (เพื่อความแฟร์สูงสุด)
+    # กฎบังคับ: เวรรวมห้ามต่างกันเกิน 2 (ผ่อนคลายเพื่อความยืดหยุ่น)
     for n1 in rotating_nurses:
         for n2 in rotating_nurses:
             if n1 == n2: continue
-            model.Add(total_work_per_nurse[n1] - total_work_per_nurse[n2] <= 1)
+            model.Add(total_work_per_nurse[n1] - total_work_per_nurse[n2] <= 2)
     
     # ==========================================
     # 3.0.1 NS Penalty: ทำให้ NS เป็นทางเลือกสุดท้าย
@@ -1426,11 +1453,11 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
     for n in rotating_nurses:
         special_offs_per_nurse[n] = sum(shifts_var[(n, d, 'O')] for d in special_days)
     
-    # RELAXED: เกลี่ยให้ต่างกันไม่เกิน 1 (ยืดหยุ่นขึ้น)
+    # RELAXED: เกลี่ยให้ต่างกันไม่เกิน 2 (ยืดหยุ่นขึ้น)
     for n1 in rotating_nurses:
         for n2 in rotating_nurses:
             if n1 != n2:
-                model.Add(special_offs_per_nurse[n1] - special_offs_per_nurse[n2] <= 1)
+                model.Add(special_offs_per_nurse[n1] - special_offs_per_nurse[n2] <= 2)
     
     # ==========================================
     # 4. เกลี่ยเวรบ่าย (S) และดึก (N) แยกกัน ต่างกันไม่เกิน 1
@@ -1443,17 +1470,17 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         s_shifts_per_nurse[n] = sum(shifts_var[(n, d, 'S')] + shifts_var[(n, d, 'NS')] for d in range(1, days_in_month + 1))
         n_shifts_per_nurse[n] = sum(shifts_var[(n, d, 'N')] + shifts_var[(n, d, 'NS')] for d in range(1, days_in_month + 1))
     
-    # เวรบ่าย (S) ต่างกันไม่เกิน 1
+    # เวรบ่าย (S) ต่างกันไม่เกิน 2
     for n1 in nurses_for_sn_fairness:
         for n2 in nurses_for_sn_fairness:
             if n1 == n2: continue
-            model.Add(s_shifts_per_nurse[n1] - s_shifts_per_nurse[n2] <= 1)
+            model.Add(s_shifts_per_nurse[n1] - s_shifts_per_nurse[n2] <= 2)
     
-    # เวรดึก (N) ต่างกันไม่เกิน 1
+    # เวรดึก (N) ต่างกันไม่เกิน 2
     for n1 in nurses_for_sn_fairness:
         for n2 in nurses_for_sn_fairness:
             if n1 == n2: continue
-            model.Add(n_shifts_per_nurse[n1] - n_shifts_per_nurse[n2] <= 1)
+            model.Add(n_shifts_per_nurse[n1] - n_shifts_per_nurse[n2] <= 2)
     
     # ==========================================
     # 4.1 เกลี่ย OT (NS) ให้เท่ากัน ±1
@@ -1468,11 +1495,11 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         # OT = จำนวน NS (เพราะ NS 16 ชม. = 1 OT)
         ot_per_nurse[n] = sum(shifts_var[(n, d, 'NS')] for d in range(1, days_in_month + 1))
     
-    # เกลี่ย OT ต่างกันไม่เกิน 1
+    # เกลี่ย OT ต่างกันไม่เกิน 2
     for n1 in nurses_for_ot_fairness:
         for n2 in nurses_for_ot_fairness:
             if n1 == n2: continue
-            model.Add(ot_per_nurse[n1] - ot_per_nurse[n2] <= 1)
+            model.Add(ot_per_nurse[n1] - ot_per_nurse[n2] <= 2)
 
     # ==========================================
     # 5. Soft Constraint: หลัง N ควร Off 2 วัน (ยกเว้น ER3)
@@ -1576,7 +1603,9 @@ def check_password():
     
     if st.button("เข้าสู่ระบบ"):
         # เปลี่ยนรหัสผ่านตรงนี้ได้เลย
-        if password == "er_kph2024":
+        # Password from secrets (fallback for backward compatibility)
+        app_password = st.secrets.get("app", {}).get("password", "er_kph2024")
+        if password == app_password:
             st.session_state.authenticated = True
             st.rerun()
         else:
