@@ -15,7 +15,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- App Version ---
-APP_VERSION = "2.4.9"  # อัปเดต: 2026-02-01 - OT=NS (1 NS = 1 OT)
+APP_VERSION = "2.5.0"  # อัปเดต: 2026-02-10 - O-เวร-O Hard, ทำงานติด 7 วัน
 
 # --- Thai Timezone Helper ---
 def get_thai_time():
@@ -1162,27 +1162,27 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         ns_penalty.append(ns_excess)  # เอาไปหักคะแนนตอนท้าย
 
     # ==========================================
-    # ทำงานต่อเนื่อง: ห้ามเกิน 6 วันติด (HARD)
+    # ทำงานต่อเนื่อง: ห้ามเกิน 7 วันติด (HARD)
     # ==========================================
     seven_day_streak_penalty = []
     
     for n in nurses:
-        # HARD: ห้ามเกิน 6 วันทำงานติดต่อกัน (ตรวจสอบทุกช่วง 7 วัน)
+        # HARD: ห้ามเกิน 7 วันทำงานติดต่อกัน (ตรวจสอบทุกช่วง 8 วัน)
+        for d in range(1, days_in_month - 6):  # d ถึง d+7 (8 วัน)
+            # ใน 8 วันติดต่อกัน ต้องมีวันหยุดอย่างน้อย 1 วัน (= ทำงานได้สูงสุด 7 วัน)
+            model.Add(sum(sum(shifts_var[(n, d + k, s)] for s in work_shifts) for k in range(8)) <= 7)
+        
+        # เช็คท้ายเดือนด้วย (8 วันย้อนหลังจากวันสุดท้าย)
+        for d in range(max(8, days_in_month - 6), days_in_month + 1):
+            model.Add(sum(sum(shifts_var[(n, d - k, s)] for s in work_shifts) for k in range(8)) <= 7)
+        
+        # SOFT: prefer ไม่เกิน 6 วันติด (ให้คะแนนติดลบถ้าทำ 7 วันติด)
         for d in range(1, days_in_month - 5):  # d ถึง d+6 (7 วัน)
-            # ใน 7 วันติดต่อกัน ต้องมีวันหยุดอย่างน้อย 1 วัน (= ทำงานได้สูงสุด 6 วัน)
-            model.Add(sum(sum(shifts_var[(n, d + k, s)] for s in work_shifts) for k in range(7)) <= 6)
-        
-        # เช็คท้ายเดือนด้วย (7 วันย้อนหลังจากวันสุดท้าย)
-        for d in range(max(7, days_in_month - 5), days_in_month + 1):
-            model.Add(sum(sum(shifts_var[(n, d - k, s)] for s in work_shifts) for k in range(7)) <= 6)
-        
-        # SOFT: prefer ไม่เกิน 5 วันติด (ให้คะแนนติดลบถ้าทำ 6 วันติด)
-        for d in range(1, days_in_month - 4):  # d ถึง d+5 (6 วัน)
-            work_in_6_days = sum(sum(shifts_var[(n, d + k, s)] for s in work_shifts) for k in range(6))
-            is_6_day_streak = model.NewBoolVar(f'6day_streak_{n}_{d}')
-            model.Add(work_in_6_days <= 5 + is_6_day_streak)
-            model.Add(work_in_6_days >= 6 * is_6_day_streak)
-            seven_day_streak_penalty.append(is_6_day_streak)
+            work_in_7_days = sum(sum(shifts_var[(n, d + k, s)] for s in work_shifts) for k in range(7))
+            is_7_day_streak = model.NewBoolVar(f'7day_streak_{n}_{d}')
+            model.Add(work_in_7_days <= 6 + is_7_day_streak)
+            model.Add(work_in_7_days >= 7 * is_7_day_streak)
+            seven_day_streak_penalty.append(is_7_day_streak)
         
         # กรณีข้ามเดือน: วันที่ 1-7 ต้องรวมข้อมูลจากเดือนก่อน
         if prev_month_data and n in prev_month_data:
@@ -1205,14 +1205,14 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
                             for k in range(1, d + 1)) <= max_curr_work
                     )
     
-    # ป้องกัน NS หลังทำงานติด 6 วัน (เพราะ NS = 2 เวร จะทำให้เกิน 7 เวร)
+    # ป้องกัน NS หลังทำงานติด 7 วัน (เพราะ NS = 2 เวร จะทำให้เกิน 8 เวร)
     for n in nurses_for_ns:
-        for d in range(7, days_in_month + 1):
-            # ถ้า 6 วันก่อนหน้าทำงานทั้งหมด แล้ววันนี้เป็น NS = 8 เวร (เกิน!)
-            # ดังนั้น ถ้าจะทำ NS ต้องมี Off อย่างน้อย 1 วันใน 6 วันก่อนหน้า
-            prev_work = sum(sum(shifts_var[(n, d - k, s)] for s in ['S', 'M', 'N', 'NS']) for k in range(1, 7))
-            # ถ้าทำงาน 6 วันก่อนหน้า (prev_work=6) แล้ว NS ห้าม
-            model.Add(prev_work + shifts_var[(n, d, 'NS')] <= 6)
+        for d in range(8, days_in_month + 1):
+            # ถ้า 7 วันก่อนหน้าทำงานทั้งหมด แล้ววันนี้เป็น NS = เกิน!
+            # ดังนั้น ถ้าจะทำ NS ต้องมี Off อย่างน้อย 1 วันใน 7 วันก่อนหน้า
+            prev_work = sum(sum(shifts_var[(n, d - k, s)] for s in ['S', 'M', 'N', 'NS']) for k in range(1, 8))
+            # ถ้าทำงาน 7 วันก่อนหน้า (prev_work=7) แล้ว NS ห้าม
+            model.Add(prev_work + shifts_var[(n, d, 'NS')] <= 7)
 
     # ==========================================
     # กฎเวร OC (On-Call Standby) - เฉพาะวันที่ 1-10
@@ -1538,6 +1538,22 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
                     model.Add(shifts_var[(n1, d, shift)] + shifts_var[(n2, d, shift)] >= 2 * same_shift)
                     separation_penalty.append(same_shift)
     
+    # ==========================================
+    # 8. Hard Constraint: ห้าม O-เวร-O (ห้ามทำงาน 1 วันเดี่ยวๆ แล้วหยุด)
+    # ==========================================
+    # เหตุผล: ถ้าหยุดวันก่อนและหยุดวันหลัง ห้ามทำงานแค่ 1 วันตรงกลาง
+    # ยกเว้น ER1 (สัญญาพิเศษ: NCD จ-พฤ → M ศ → Off ส-อา = O-M-O ทุกสัปดาห์)
+    # OC และ L_T ไม่ถือเป็นเวรทำงานปกติ จึงอนุญาตให้อยู่ตรงกลางได้
+    nurses_for_isolated_rule = [n for n in nurses if n != 'ER1']
+    
+    for n in nurses_for_isolated_rule:
+        for d in range(2, days_in_month):  # d ตั้งแต่วันที่ 2 ถึง days_in_month-1
+            # ถ้า O(d-1) + O(d+1) = 2 → d ต้องเป็น O/OC/L_T (ห้ามทำงาน)
+            model.Add(
+                shifts_var[(n, d - 1, 'O')] + shifts_var[(n, d + 1, 'O')]
+                <= 1 + shifts_var[(n, d, 'O')] + shifts_var[(n, d, 'OC')] + shifts_var[(n, d, 'L_T')]
+            )
+    
     # รวม soft constraints ทั้งหมดเข้าด้วยกัน
     # น้ำหนัก: preferred_constraints (M fix) > NS excess > separation > O→N penalty > work_days_diff > ...
     model.Maximize(
@@ -1553,6 +1569,7 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         sum(s_o_n_penalty) * 35 -  # Penalty สำหรับ S-O-N (เสียวันหยุดฟรี)
         sum(seven_day_streak_penalty) * 45 -  # Penalty สำหรับทำงาน 7 วันติด
         sum(work_days_diff) * 50  # หักคะแนนถ้าวันทำงานไม่ตรงเป้า
+        # O-เวร-O เปลี่ยนเป็น Hard Constraint แล้ว ไม่ต้องหักคะแนน
         # [ER7] M+ลา=10 เปลี่ยนเป็น Hard Constraint แล้ว ไม่ต้องหักคะแนน
     )
 

@@ -7,7 +7,7 @@ import pytz
 import calendar
 
 # --- App Version ---
-APP_VERSION = "2.4.9"  # อัปเดต: 2026-02-01 - OT=NS (1 NS = 1 OT)
+APP_VERSION = "2.5.0"  # อัปเดต: 2026-02-10 - O-เวร-O Hard, ทำงานติด 7 วัน
 
 # --- Thai Timezone Helper ---
 def get_thai_time():
