@@ -15,7 +15,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- App Version ---
-APP_VERSION = "2.5.0"  # อัปเดต: 2026-02-10 - O-เวร-O Hard, ทำงานติด 7 วัน
+APP_VERSION = "2.5.1"  # อัปเดต: 2026-02-16 - ER1 Fix Request override วันหยุด (M/S/N)
 
 # --- Thai Timezone Helper ---
 def get_thai_time():
@@ -1276,14 +1276,29 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
             if req.get('nurse') == 'ER1' and req.get('type') in ['Leave_Train', 'Leave', 'Train']:
                 er1_leave_days.add(req.get('date'))
     
+    # สร้าง dict ของวันที่ ER1 มี fix request (เพื่อ override hard O ในวันหยุด/สุดสัปดาห์)
+    er1_fix_days = {}
+    for req in fix_requests:
+        if req.get('nurse') == 'ER1' and req.get('month') == month and req.get('year') == year:
+            shift = req.get('shift')
+            if shift in ['M', 'S', 'N']:
+                for d in req.get('dates', []):
+                    er1_fix_days[d] = shift
+    
     for d in range(1, days_in_month + 1):
         wd = calendar.weekday(year, month, d)
         week_occurrence = get_week_occurrence(d)
 
         # ER1 (Hard Fix): จ-พฤ NCD, ศุกร์ M, ส-อา หยุด, วันหยุดนักขัตฤกษ์ หยุด
+        # ถ้ามี fix request → override ได้ (บังคับเวรตามที่ขอแทนหยุด)
         is_hol = is_holiday(year, month, d)
-        if is_hol or wd in [5, 6]:  # วันหยุดนักขัตฤกษ์ หรือ ส-อา = หยุด
-            model.Add(shifts_var[('ER1', d, 'O')] == 1)
+        if is_hol or wd in [5, 6]:  # วันหยุดนักขัตฤกษ์ หรือ ส-อา
+            if d in er1_fix_days:
+                # มี fix request → บังคับเวรตามที่ขอ (override วันหยุด)
+                model.Add(shifts_var[('ER1', d, er1_fix_days[d])] == 1)
+                logger.info(f"[ER1] Fix override: day {d} → {er1_fix_days[d]} (holiday/weekend)")
+            else:
+                model.Add(shifts_var[('ER1', d, 'O')] == 1)
         elif wd in [0, 1, 2, 3]:  # จ-พฤ = NCD (แสดงเป็น O ในตาราง)
             model.Add(shifts_var[('ER1', d, 'O')] == 1)
         elif wd == 4:  # ศุกร์

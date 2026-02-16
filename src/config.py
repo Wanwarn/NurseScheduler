@@ -7,7 +7,7 @@ import pytz
 import calendar
 
 # --- App Version ---
-APP_VERSION = "2.5.0"  # อัปเดต: 2026-02-10 - O-เวร-O Hard, ทำงานติด 7 วัน
+APP_VERSION = "2.5.1"  # อัปเดต: 2026-02-16 - ER1 Fix Request override วันหยุด (M/S/N)
 
 # --- Thai Timezone Helper ---
 def get_thai_time():
