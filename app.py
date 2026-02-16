@@ -15,7 +15,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- App Version ---
-APP_VERSION = "2.5.1"  # อัปเดต: 2026-02-16 - ER1 Fix Request override วันหยุด (M/S/N)
+APP_VERSION = "2.6.0"  # อัปเดต: 2026-02-16 - เพิ่มคนนอกหน่วยงาน (External Staff) + ER1 Fix Holiday
 
 # --- Thai Timezone Helper ---
 def get_thai_time():
@@ -314,6 +314,76 @@ def save_fix_requests_to_gsheet():
         else:
             st.info("ℹ️ ไม่มี Fix Request ใหม่ที่ต้องบันทึก")
     except Exception as e: st.error(f"Error saving fix requests: {e}")
+
+# --- External Staff (คนนอกหน่วยงาน) ---
+def load_external_staff_from_gsheet():
+    """โหลดข้อมูลคนนอกหน่วยงานจาก Google Sheets"""
+    try:
+        sh = connect_gsheet()
+        if not sh: return []
+        try:
+            records = sh.worksheet("ExternalStaff").get_all_records()
+        except:
+            logger.warning("ExternalStaff worksheet not found")
+            return []
+        
+        sync_time = get_thai_time()
+        
+        for r in records:
+            try:
+                r['date'] = int(r.get('date', 0))
+                r['month'] = int(r.get('month', 0))
+                r['year'] = int(r.get('year', 0))
+            except (ValueError, TypeError):
+                pass
+            if not r.get('timestamp'):
+                r['timestamp'] = f"(synced: {sync_time})"
+        return records
+    except:
+        return []
+
+def save_external_staff_to_gsheet():
+    """บันทึกคนนอกหน่วยงานไปยัง Google Sheet"""
+    try:
+        sh = connect_gsheet()
+        if not sh: return
+        try:
+            ws = sh.worksheet("ExternalStaff")
+        except:
+            ws = sh.add_worksheet(title="ExternalStaff", rows=100, cols=10)
+            ws.update(values=[['name', 'shift', 'date', 'month', 'year', 'timestamp']], range_name='A1')
+        
+        # 1. อ่านข้อมูลเดิม
+        existing_records = ws.get_all_records()
+        
+        # 2. สร้าง set ของข้อมูลที่มีอยู่
+        existing_keys = set()
+        for r in existing_records:
+            key = (str(r.get('name', '')), str(r.get('shift', '')), str(r.get('date', '')), str(r.get('month', '')), str(r.get('year', '')))
+            existing_keys.add(key)
+        
+        # 3. หาข้อมูลใหม่
+        new_records = []
+        for item in st.session_state.external_staff:
+            key = (str(item.get('name', '')), str(item.get('shift', '')), str(item.get('date', '')), str(item.get('month', '')), str(item.get('year', '')))
+            if key not in existing_keys:
+                new_records.append(item)
+                existing_keys.add(key)
+        
+        # 4. Append ต่อท้าย
+        if new_records:
+            next_row = len(existing_records) + 2
+            data = []
+            for item in new_records:
+                row = [item.get('name', ''), item.get('shift', ''), item.get('date', ''), item.get('month', ''), item.get('year', ''), item.get('timestamp', '')]
+                data.append(row)
+            ws.update(values=data, range_name=f'A{next_row}')
+            st.success(f"✅ เพิ่มคนนอกหน่วยงานใหม่ {len(new_records)} รายการ")
+        else:
+            st.info("ℹ️ ไม่มีคนนอกหน่วยงานใหม่ที่ต้องบันทึก")
+    except Exception as e:
+        logger.exception(f"Error saving external staff: {e}")
+        st.error(f"Error saving external staff: {e}")
 
 # --- Staffing Overrides ---
 def load_staffing_overrides_from_gsheet():
@@ -921,11 +991,13 @@ def parse_previous_month_schedule(uploaded_file, nurses):
         return None
 
 # --- 1. ฟังก์ชันจัดตาราง (Scheduler Engine) ---
-def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=None, staffing_overrides=None, enable_oc=True, prev_month_data=None, ns_target=0):
+def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=None, staffing_overrides=None, enable_oc=True, prev_month_data=None, ns_target=0, external_staff=None):
     if fix_requests is None:
         fix_requests = []
     if staffing_overrides is None:
         staffing_overrides = []
+    if external_staff is None:
+        external_staff = []
     
     model = cp_model.CpModel()
     
@@ -1044,12 +1116,23 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
                     elif override.get('shift') == 'S':
                         s_req = override.get('count', 2)
         
+        # คนนอกหน่วยงาน: ลด staffing requirement ตามจำนวนคนนอกที่มาช่วย
+        ext_m = sum(1 for ext in external_staff if ext.get('date') == d and ext.get('month') == month and ext.get('year') == year and ext.get('shift') == 'M')
+        ext_s = sum(1 for ext in external_staff if ext.get('date') == d and ext.get('month') == month and ext.get('year') == year and ext.get('shift') == 'S')
+        ext_n = sum(1 for ext in external_staff if ext.get('date') == d and ext.get('month') == month and ext.get('year') == year and ext.get('shift') == 'N')
+        n_req = max(0, n_req - ext_n)
+        s_req = max(0, s_req - ext_s)
+        
+        if ext_m + ext_s + ext_n > 0:
+            logger.info(f"[EXT] Day {d}: external M={ext_m}, S={ext_s}, N={ext_n}")
+        
         # N + NS == n_req (EXACT - บังคับ n_req คน)
         model.Add(sum(shifts_var[(n, d, 'N')] + shifts_var[(n, d, 'NS')] for n in nurses) == n_req)
         # S + NS == s_req (EXACT - บังคับ s_req คน)
         model.Add(sum(shifts_var[(n, d, 'S')] + shifts_var[(n, d, 'NS')] for n in nurses) == s_req)
         req_m = 4 if is_special_day else 3  # เสาร์-อาทิตย์ หรือ วันหยุดนักขัตฤกษ์ = 4 คน
-        model.Add(sum(shifts_var[(n, d, 'M')] for n in nurses) == req_m)  # EXACT: บังคับ M = 3 (วันทำการ) หรือ 4 (วันหยุด)
+        req_m = max(0, req_m - ext_m)  # ลดตามคนนอกที่มาช่วย M
+        model.Add(sum(shifts_var[(n, d, 'M')] for n in nurses) == req_m)  # EXACT: บังคับ M ตาม requirement
 
     # กฎการสลับเวร
     for n in nurses:
@@ -1660,6 +1743,8 @@ if 'fix_requests' not in st.session_state:
     st.session_state.fix_requests = load_fix_requests_from_gsheet()
 if 'staffing_overrides' not in st.session_state:
     st.session_state.staffing_overrides = load_staffing_overrides_from_gsheet()
+if 'external_staff' not in st.session_state:
+    st.session_state.external_staff = load_external_staff_from_gsheet()
 
 # Sidebar
 with st.sidebar:
@@ -1905,12 +1990,14 @@ with st.sidebar:
                     new_requests = load_requests_from_gsheet()
                     new_fix_requests = load_fix_requests_from_gsheet()
                     new_staffing = load_staffing_overrides_from_gsheet()
+                    new_external = load_external_staff_from_gsheet()
                     
                     st.session_state.requests = new_requests
                     st.session_state.fix_requests = new_fix_requests
                     st.session_state.staffing_overrides = new_staffing
+                    st.session_state.external_staff = new_external
                     
-                    st.success(f"✅ ดึงข้อมูลสำเร็จ! วันลา: {len(new_requests)}, Fix: {len(new_fix_requests)}, กำลังคน: {len(new_staffing)}")
+                    st.success(f"✅ ดึงข้อมูลสำเร็จ! วันลา: {len(new_requests)}, Fix: {len(new_fix_requests)}, กำลังคน: {len(new_staffing)}, คนนอก: {len(new_external)}")
                     st.rerun()
                 except Exception as e:
                     st.error(f"❌ เกิดข้อผิดพลาด: {e}")
@@ -1922,6 +2009,7 @@ with st.sidebar:
                     save_requests_to_gsheet()
                     save_fix_requests_to_gsheet()
                     save_staffing_overrides_to_gsheet()
+                    save_external_staff_to_gsheet()
                     st.success("✅ บันทึกสำเร็จ!")
                 except Exception as e:
                     st.error(f"❌ เกิดข้อผิดพลาด: {e}")
@@ -2104,6 +2192,65 @@ with st.sidebar:
                 st.rerun()
     
     # ==========================================
+    # 🏥 คนนอกหน่วยงาน (External Staff)
+    # ==========================================
+    st.markdown("---")
+    st.header("🏥 คนนอกหน่วยงาน")
+    st.caption("เพิ่มคนนอกหน่วยงานที่มาช่วยเวร → ระบบจะลด staffing requirement อัตโนมัติ")
+    
+    with st.form("external_form", clear_on_submit=True):
+        ext_name = st.text_input("ชื่อคนนอกหน่วยงาน", placeholder="เช่น พี่นก, คุณสมศรี")
+        ext_shift = st.radio("ประเภทเวร", ["เช้า (M)", "บ่าย (S)", "ดึก (N)"], horizontal=True, key="ext_shift")
+        ext_dates = st.multiselect("เลือกวันที่", range(1, days_in_month + 1), key="ext_dates")
+        
+        if st.form_submit_button("เพิ่มรายการ"):
+            if ext_name and ext_dates:
+                shift_code = {'เช้า (M)': 'M', 'บ่าย (S)': 'S', 'ดึก (N)': 'N'}[ext_shift]
+                timestamp = get_thai_time()
+                
+                for d in ext_dates:
+                    st.session_state.external_staff.append({
+                        'name': ext_name,
+                        'shift': shift_code,
+                        'date': d,
+                        'month': month,
+                        'year': year,
+                        'timestamp': timestamp
+                    })
+                save_external_staff_to_gsheet()
+                st.success(f"✅ เพิ่ม {ext_name} เวร {ext_shift} วันที่ {', '.join(map(str, ext_dates))} แล้ว!")
+            else:
+                st.warning("⚠️ กรุณากรอกชื่อและเลือกวันที่")
+    
+    # แสดงรายการคนนอกที่เพิ่มแล้ว
+    ext_this_month = [e for e in st.session_state.external_staff if e.get('month') == month and e.get('year') == year]
+    if ext_this_month:
+        st.caption("✅ รายการคนนอกหน่วยงานเดือนนี้:")
+        
+        indices_to_delete_ext = []
+        for idx, ext in enumerate(st.session_state.external_staff):
+            if ext.get('month') == month and ext.get('year') == year:
+                col1, col2 = st.columns([0.1, 0.9])
+                with col1:
+                    if st.checkbox("", key=f"del_ext_{idx}", label_visibility="collapsed"):
+                        indices_to_delete_ext.append(idx)
+                with col2:
+                    st.write(f"**{ext['name']}** - เวร **{ext['shift']}** - วันที่ {ext['date']}")
+        
+        col_btn1, col_btn2 = st.columns(2)
+        with col_btn1:
+            if st.button("🗑️ ลบรายการที่เลือก", type="secondary", disabled=len(indices_to_delete_ext) == 0, key="del_ext_btn"):
+                for idx in sorted(indices_to_delete_ext, reverse=True):
+                    st.session_state.external_staff.pop(idx)
+                save_external_staff_to_gsheet()
+                st.rerun()
+        with col_btn2:
+            if st.button("🗑️ ล้างคนนอกทั้งหมด", type="secondary", key="clear_ext_btn"):
+                st.session_state.external_staff = []
+                save_external_staff_to_gsheet()
+                st.rerun()
+    
+    # ==========================================
     # 👥 กำลังคนพิเศษ (Staffing Override)
     # ==========================================
     st.markdown("---")
@@ -2266,14 +2413,16 @@ with st.sidebar:
         can_proceed = True
     
     # ปุ่มรีเซ็ตทุกอย่าง (ล้างวันลา + ล้างตารางเวรเก่า)
-    if st.button("🔄 รีเซ็ตทั้งหมด (ล้างวันลา+ตาราง+Fix+กำลังคน)", type="secondary"):
+    if st.button("🔄 รีเซ็ตทั้งหมด (ล้างวันลา+ตาราง+Fix+กำลังคน+คนนอก)", type="secondary"):
         st.session_state.requests = []
         st.session_state.fix_requests = []
         st.session_state.staffing_overrides = []
+        st.session_state.external_staff = []
         st.session_state.schedule_df = None
         save_requests_to_gsheet()
         save_fix_requests_to_gsheet()
         save_staffing_overrides_to_gsheet()
+        save_external_staff_to_gsheet()
         st.rerun()
 
     st.markdown("---")
@@ -2288,7 +2437,8 @@ with st.sidebar:
                 year, month, days_in_month, nurses_list, 
                 st.session_state.requests,
                 st.session_state.fix_requests, st.session_state.staffing_overrides,
-                enable_oc=enable_oc, prev_month_data=prev_month_data, ns_target=ns_target
+                enable_oc=enable_oc, prev_month_data=prev_month_data, ns_target=ns_target,
+                external_staff=st.session_state.external_staff
             )
             if df is not None:
                 st.session_state.schedule_df = df
@@ -2363,6 +2513,16 @@ with st.sidebar:
                                 'ประเภท': f"📌 Fix เวร {req.get('shift')}",
                                 'หมายเหตุ': f"ขอเวร {req.get('shift')}"
                             })
+                
+                # 4. คนนอกหน่วยงาน
+                for ext in st.session_state.external_staff:
+                    if ext.get('month') == month and ext.get('year') == year:
+                        debug_data.append({
+                            'พยาบาล': f"🏥 {ext.get('name', '-')}",
+                            'วันที่': ext.get('date'),
+                            'ประเภท': f"🏥 คนนอก {ext.get('shift')}",
+                            'หมายเหตุ': f"ช่วยเวร {ext.get('shift')}"
+                        })
                 
                 if debug_data:
                     # เรียงตามวันที่

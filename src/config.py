@@ -7,7 +7,7 @@ import pytz
 import calendar
 
 # --- App Version ---
-APP_VERSION = "2.5.1"  # อัปเดต: 2026-02-16 - ER1 Fix Request override วันหยุด (M/S/N)
+APP_VERSION = "2.6.0"  # อัปเดต: 2026-02-16 - เพิ่มคนนอกหน่วยงาน (External Staff) + ER1 Fix Holiday
 
 # --- Thai Timezone Helper ---
 def get_thai_time():
