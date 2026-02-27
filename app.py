@@ -2,10 +2,11 @@ import streamlit as st
 from ortools.sat.python import cp_model
 import pandas as pd
 import calendar
-import os # อย่าลืม import os
+import os
 from datetime import datetime
 import pytz
 import logging
+import gspread
 
 # --- Logging Configuration ---
 logging.basicConfig(
@@ -14,8 +15,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- App Version ---
-APP_VERSION = "2.6.0"  # อัปเดต: 2026-02-16 - เพิ่มคนนอกหน่วยงาน (External Staff) + ER1 Fix Holiday
+# --- Import refactored modules ---
+# โค้ดหลักอยู่ใน src/ โดย app.py import มาใช้
+# solve_schedule จะใช้จาก src.scheduler (แก้ bug ns_penalty แล้ว)
+from src.config import APP_VERSION, THAI_HOLIDAYS, NURSE_NAMES, is_holiday, get_holiday_name, get_thai_time, SCOPE, CREDENTIALS_FILE, get_sheet_url, get_app_password
+from src.scheduler import solve_schedule
 
 # --- Thai Timezone Helper ---
 def get_thai_time():
@@ -272,7 +276,9 @@ def load_fix_requests_from_gsheet():
             if not r.get('timestamp'):
                 r['timestamp'] = f"(synced: {sync_time})"
         return records
-    except: return []
+    except Exception as e:
+        logger.exception(f"Error loading fix requests: {e}")
+        return []
 
 def save_fix_requests_to_gsheet():
     """บันทึกข้อมูลจาก session_state ไปยัง Google Sheet (รวมกับข้อมูลเดิม)"""
@@ -323,7 +329,7 @@ def load_external_staff_from_gsheet():
         if not sh: return []
         try:
             records = sh.worksheet("ExternalStaff").get_all_records()
-        except:
+        except gspread.exceptions.WorksheetNotFound:
             logger.warning("ExternalStaff worksheet not found")
             return []
         
@@ -339,7 +345,8 @@ def load_external_staff_from_gsheet():
             if not r.get('timestamp'):
                 r['timestamp'] = f"(synced: {sync_time})"
         return records
-    except:
+    except Exception as e:
+        logger.exception(f"Error loading external staff: {e}")
         return []
 
 def save_external_staff_to_gsheet():
@@ -349,7 +356,7 @@ def save_external_staff_to_gsheet():
         if not sh: return
         try:
             ws = sh.worksheet("ExternalStaff")
-        except:
+        except gspread.exceptions.WorksheetNotFound:
             ws = sh.add_worksheet(title="ExternalStaff", rows=100, cols=10)
             ws.update(values=[['name', 'shift', 'date', 'month', 'year', 'timestamp']], range_name='A1')
         
@@ -402,7 +409,9 @@ def load_staffing_overrides_from_gsheet():
             except (ValueError, TypeError):
                 pass
         return records
-    except: return []
+    except Exception as e:
+        logger.exception(f"Error loading staffing overrides: {e}")
+        return []
 
 def save_staffing_overrides_to_gsheet():
     try:
@@ -451,7 +460,7 @@ def ensure_summary_log_sheet():
             return None
         try:
             ws = sh.worksheet("SummaryLog")
-        except:
+        except gspread.exceptions.WorksheetNotFound:
             # สร้าง worksheet ใหม่พร้อม header
             ws = sh.add_worksheet(title="SummaryLog", rows=100, cols=15)
             headers = ['Timestamp', 'Month', 'Year', 'Nurse', 'WorkDays', 
@@ -533,7 +542,7 @@ def save_summary_to_gsheet(summary_data, year, month):
                         if int(row[month_idx]) == month and int(row[year_idx]) == year:
                             deleted_count += 1
                             continue  # ไม่เก็บแถวนี้ (ลบออก)
-                    except:
+                    except (ValueError, IndexError):
                         pass
                 rows_to_keep.append(row)
             
@@ -592,7 +601,7 @@ def load_summary_from_gsheet():
                 normalized_records.append(new_record)
             
             return normalized_records
-        except:
+        except gspread.exceptions.WorksheetNotFound:
             return None
     except Exception as e:
         st.error(f"❌ Error loading summary: {e}")
@@ -609,7 +618,7 @@ def load_previous_schedule_from_gsheet(nurses):
         # ลองเปิด worksheet 'PreviousSchedule'
         try:
             ws = sh.worksheet("PreviousSchedule")
-        except:
+        except gspread.exceptions.WorksheetNotFound:
             # ถ้าไม่มี sheet → คืน None
             return None
         
@@ -700,7 +709,7 @@ def save_schedule_to_gsheet(schedule_df, year, month):
         # ลองเปิด worksheet 'PreviousSchedule' หรือสร้างใหม่
         try:
             ws = sh.worksheet("PreviousSchedule")
-        except:
+        except gspread.exceptions.WorksheetNotFound:
             # สร้าง worksheet ใหม่
             ws = sh.add_worksheet(title="PreviousSchedule", rows=20, cols=40)
         
@@ -763,9 +772,20 @@ def save_schedule_to_gsheet(schedule_df, year, month):
 def get_week_occurrence(day):
     return (day - 1) // 7 + 1
 
-def diagnose_scheduling_issues(year, month, days_in_month, nurses, requests, staffing_overrides, enable_oc):
+def diagnose_scheduling_issues(year, month, days_in_month, nurses, requests, staffing_overrides, enable_oc, fix_requests=None):
     """วิเคราะห์ปัญหาที่อาจทำให้จัดตารางไม่ได้"""
+    if fix_requests is None:
+        fix_requests = []
     issues = []
+    
+    # สร้าง set วันที่ ER1 มี fix request (ทำงานแทนหยุด)
+    er1_fix_days = set()
+    for req in fix_requests:
+        if req.get('nurse') == 'ER1' and req.get('month') == month and req.get('year') == year:
+            shift = req.get('shift')
+            if shift in ['M', 'S', 'N']:
+                for d in req.get('dates', []):
+                    er1_fix_days.add(d)
     
     # นับจำนวนคนที่ลาแต่ละวัน
     off_per_day = {d: [] for d in range(1, days_in_month + 1)}
@@ -811,8 +831,16 @@ def diagnose_scheduling_issues(year, month, days_in_month, nurses, requests, sta
         # ต้องการอย่างน้อย M + S + N + OC (แม้จะซ้อนได้บางส่วน แต่ใช้ประมาณการ)
         min_needed = req_m + req_s + req_n + req_oc
         
-        # ER1 Fix: ศุกร์ M, อื่นๆ Off
-        er1_available_for_m = 1 if 'ER1' in available and weekday == 4 else 0
+        # ER1 Fix: ศุกร์ M, สัปดาห์ NCD (O), ส-อา/นักขัตฤกษ์ หยุด
+        # แต่ถ้ามี fix request → ER1 ทำงานได้ในวันหยุดด้วย
+        er1_has_fix = d in er1_fix_days
+        er1_available_for_work = False
+        if 'ER1' in available:
+            if weekday == 4:  # ศุกร์ → M
+                er1_available_for_work = True
+            elif is_special_day and er1_has_fix:  # วันหยุดแต่มี fix request → ทำงาน
+                er1_available_for_work = True
+        er1_available_for_m = 1 if er1_available_for_work else 0
         
         # คนที่ลา/ประชุม นับเป็น M ได้
         leave_count = len(leave_per_day[d])
@@ -821,8 +849,8 @@ def diagnose_scheduling_issues(year, month, days_in_month, nurses, requests, sta
         need_for_m = max(0, req_m - leave_count - er1_available_for_m)
         need_for_sn = req_s + req_n
         
-        # คนที่ว่างหลังหัก ER1 (ER1 ทำได้แค่ M ศุกร์)
-        workers = [n for n in available if n != 'ER1']
+        # คนที่ว่างหลังหัก ER1 (ยกเว้น ER1 มี fix request)
+        workers = [n for n in available if n != 'ER1' or er1_has_fix]
         
         if len(off_per_day[d]) > 0 and available_count < need_for_m + need_for_sn:
             day_type = "ส-อา/นักขัตฤกษ์" if is_special_day else "วันธรรมดา"
@@ -837,7 +865,7 @@ def diagnose_scheduling_issues(year, month, days_in_month, nurses, requests, sta
                 'needed_s': req_s,
                 'needed_n': req_n,
                 'needed_oc': req_oc,
-                'er1_status': 'หยุดเสาร์-อาทิตย์/นักขัตฤกษ์' if 'ER1' in available and is_special_day and weekday != 4 else 'พร้อม'
+                'er1_status': 'ทำงาน (Fix Request)' if 'ER1' in available and is_special_day and er1_has_fix else ('หยุดเสาร์-อาทิตย์/นักขัตฤกษ์' if 'ER1' in available and is_special_day and weekday != 4 else 'พร้อม')
             })
     
     return issues
@@ -991,7 +1019,9 @@ def parse_previous_month_schedule(uploaded_file, nurses):
         return None
 
 # --- 1. ฟังก์ชันจัดตาราง (Scheduler Engine) ---
-def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=None, staffing_overrides=None, enable_oc=True, prev_month_data=None, ns_target=0, external_staff=None):
+# NOTE: ใช้ solve_schedule จาก src.scheduler (import ด้านบน)
+# ฟังก์ชันด้านล่างเก็บไว้เป็น legacy reference เท่านั้น
+def _solve_schedule_legacy(year, month, days_in_month, nurses, requests, fix_requests=None, staffing_overrides=None, enable_oc=True, prev_month_data=None, ns_target=0, external_staff=None):
     if fix_requests is None:
         fix_requests = []
     if staffing_overrides is None:
@@ -1171,12 +1201,17 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
     n_skip_day_penalty = []  # Soft: N-O-N ควรหลีกเลี่ยง
     
     for n in nurses:
-        # 1. ห้าม N-N, NS-NS, N-NS, NS-N (ดึกติดกัน) - HARD (ต้องบังคับ)
+        # 1. กฎดึกติดกัน - อนุญาต N→N สูงสุด 2 เวร, ห้าม N→N→N (3 ติด)
+        # NS (16 ชม.) ยังห้ามติดกันเด็ดขาด
         for d in range(1, days_in_month):
-            model.Add(shifts_var[(n, d, 'N')] + shifts_var[(n, d + 1, 'N')] <= 1)
+            # NS ห้ามติดกันทุกกรณี (16 ชม. หนักเกินไป)
             model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 1, 'NS')] <= 1)
             model.Add(shifts_var[(n, d, 'N')] + shifts_var[(n, d + 1, 'NS')] <= 1)
             model.Add(shifts_var[(n, d, 'NS')] + shifts_var[(n, d + 1, 'N')] <= 1)
+        
+        # ห้ามดึก 3 วันติด (N-N-N) - HARD
+        for d in range(1, days_in_month - 1):
+            model.Add(shifts_var[(n, d, 'N')] + shifts_var[(n, d + 1, 'N')] + shifts_var[(n, d + 2, 'N')] <= 2)
         
         # 2. O-N, O-NS (ควรทำงานก่อนดึก) - SOFT (ลดจุด แต่ยอมได้ถ้าจำเป็น)
         for d in range(1, days_in_month):
@@ -1506,12 +1541,12 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
             model.Add(total_work_per_nurse[n1] - total_work_per_nurse[n2] <= 2)
     
     # ==========================================
-    # 3.0.1 NS Penalty: ทำให้ NS เป็นทางเลือกสุดท้าย
+    # 3.0.1 NS Avoidance Penalty: ทำให้ NS เป็นทางเลือกสุดท้าย
     # ==========================================
-    ns_penalty = []
+    ns_avoidance_penalty = []
     for n in nurses_for_ns:
         for d in range(1, days_in_month + 1):
-            ns_penalty.append(shifts_var[(n, d, 'NS')])
+            ns_avoidance_penalty.append(shifts_var[(n, d, 'NS')])
     
     # ==========================================
     # 3.0.2 Prefer เวรเช้าวันหยุด (แทน NS)
@@ -1663,7 +1698,8 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         sum(oc_avoid_penalty) * 20 -  # ลบคะแนนเมื่อ ER4, ER8 ทำ OC
         sum(o_before_n_penalty) * 15 -  # ลบคะแนนเมื่อ O→N (ควรหลีกเลี่ยง)
         sum(n_skip_day_penalty) * 10 -  # ลบคะแนนเมื่อ N-O-N (ดึกสลับวัน)
-        sum(ns_penalty) * 500 -  # หักหนักๆ ถ้าเกิน NS quota
+        sum(ns_avoidance_penalty) * 500 -  # หักหนักๆ ให้ NS เป็นทางเลือกสุดท้าย
+        sum(ns_penalty) * 200 -  # หักคะแนน NS excess (เกินจาก ns_target)
         sum(s_o_n_penalty) * 35 -  # Penalty สำหรับ S-O-N (เสียวันหยุดฟรี)
         sum(seven_day_streak_penalty) * 45 -  # Penalty สำหรับทำงาน 7 วันติด
         sum(work_days_diff) * 50  # หักคะแนนถ้าวันทำงานไม่ตรงเป้า
@@ -1719,7 +1755,7 @@ def check_password():
     if st.button("เข้าสู่ระบบ"):
         # เปลี่ยนรหัสผ่านตรงนี้ได้เลย
         # Password from secrets (fallback for backward compatibility)
-        app_password = st.secrets.get("app", {}).get("password", "er_kph2024")
+        app_password = st.secrets.get("app", {}).get("password", "")
         if password == app_password:
             st.session_state.authenticated = True
             st.rerun()
@@ -2062,10 +2098,8 @@ with st.sidebar:
         if st.form_submit_button("เพิ่มรายการ") and r_dates:
             if 'ขอหยุด' in r_type:
                 code = 'Off'
-            elif 'ลา' in r_type:
-                code = 'Leave'
             else:
-                code = 'Train'
+                code = 'Leave_Train'  # ลา + ประชุม/อบรม ใช้ Leave_Train ให้ตรงกับ solver
             
             # สร้าง timestamp (ใช้เวลาไทย)
             timestamp = get_thai_time()
@@ -2449,7 +2483,8 @@ with st.sidebar:
                 # วิเคราะห์ปัญหา
                 issues = diagnose_scheduling_issues(
                     year, month, days_in_month, nurses_list,
-                    st.session_state.requests, st.session_state.staffing_overrides, enable_oc
+                    st.session_state.requests, st.session_state.staffing_overrides, enable_oc,
+                    fix_requests=st.session_state.fix_requests
                 )
                 
                 if issues:
@@ -2949,7 +2984,7 @@ if st.session_state.schedule_df is not None:
                             )
                             monthly_avg = monthly_avg.sort_values('sort_key').drop('sort_key', axis=1)
                             monthly_avg = monthly_avg.set_index('เดือน/ปี')
-                        except:
+                        except (ValueError, IndexError):
                             pass
                         
                         st.dataframe(monthly_avg, use_container_width=True)

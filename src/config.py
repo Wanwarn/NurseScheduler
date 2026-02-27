@@ -7,7 +7,7 @@ import pytz
 import calendar
 
 # --- App Version ---
-APP_VERSION = "2.6.0"  # อัปเดต: 2026-02-16 - เพิ่มคนนอกหน่วยงาน (External Staff) + ER1 Fix Holiday
+APP_VERSION = "2.7.0"  # อัปเดต: 2026-02-27 - Refactor + Bug fixes (ns_penalty, bare except, Leave_Train)
 
 # --- Thai Timezone Helper ---
 def get_thai_time():
@@ -16,7 +16,7 @@ def get_thai_time():
     return datetime.now(bangkok_tz).strftime("%Y-%m-%d %H:%M:%S")
 
 
-# --- Thai Public Holidays 2025-2026 ---
+# --- Thai Public Holidays 2025-2027 ---
 THAI_HOLIDAYS = {
     2025: {
         1: [1, 29],       # วันขึ้นปีใหม่ + ตรุษจีน
@@ -41,6 +41,17 @@ THAI_HOLIDAYS = {
         8: [12],          # วันแม่แห่งชาติ
         10: [13, 23],     # วันสวรรคต ร.9 + ปิยมหาราช
         12: [5, 7, 10, 31],  # วันพ่อ + ชดเชย + รัฐธรรมนูญ + สิ้นปี
+    },
+    2027: {
+        # TODO: อัปเดตจากประกาศวันหยุดราชการอย่างเป็นทางการ
+        1: [1],           # วันขึ้นปีใหม่
+        4: [6, 13, 14, 15],  # วันจักรี + สงกรานต์
+        5: [1, 4],        # วันแรงงาน + ฉัตรมงคล
+        6: [3],           # วันเฉลิมฯ พระราชินี
+        7: [28],          # วันเฉลิมฯ ร.10
+        8: [12],          # วันแม่แห่งชาติ
+        10: [13, 23],     # วันสวรรคต ร.9 + ปิยมหาราช
+        12: [5, 10, 31],  # วันพ่อ + รัฐธรรมนูญ + สิ้นปี
     }
 }
 
@@ -91,5 +102,5 @@ def get_sheet_url():
     )
 
 def get_app_password():
-    """Get app password from secrets or fallback"""
-    return st.secrets.get("app", {}).get("password", "er_kph2024")
+    """Get app password from secrets (no fallback for security)"""
+    return st.secrets.get("app", {}).get("password", "")

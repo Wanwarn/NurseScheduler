@@ -15,6 +15,7 @@ from src.utils import extract_nurse_id
 logger = logging.getLogger(__name__)
 
 
+@st.cache_resource(ttl=300)
 def connect_gsheet():
     """เชื่อมต่อกับ Google Sheets (รองรับทั้ง local และ Streamlit Cloud)"""
     try:
@@ -132,6 +133,79 @@ def save_requests_to_gsheet():
     except Exception as e:
         logger.exception(f"Error saving requests: {e}")
         st.error(f"Error saving requests: {e}")
+
+
+# --- External Staff ---
+def load_external_staff_from_gsheet():
+    """โหลดข้อมูลคนนอกหน่วยงานจาก Google Sheets"""
+    try:
+        sh = connect_gsheet()
+        if not sh:
+            return []
+        try:
+            records = sh.worksheet("ExternalStaff").get_all_records()
+        except gspread.exceptions.WorksheetNotFound:
+            logger.warning("ExternalStaff worksheet not found")
+            return []
+        
+        sync_time = get_thai_time()
+        
+        for r in records:
+            try:
+                r['date'] = int(r.get('date', 0))
+                r['month'] = int(r.get('month', 0))
+                r['year'] = int(r.get('year', 0))
+            except (ValueError, TypeError):
+                pass
+            if not r.get('timestamp'):
+                r['timestamp'] = f"(synced: {sync_time})"
+        return records
+    except Exception as e:
+        logger.exception(f"Error loading external staff: {e}")
+        return []
+
+
+def save_external_staff_to_gsheet():
+    """บันทึกข้อมูลคนนอกหน่วยงานไปยัง Google Sheet"""
+    try:
+        sh = connect_gsheet()
+        if not sh:
+            return
+        try:
+            ws = sh.worksheet("ExternalStaff")
+        except gspread.exceptions.WorksheetNotFound:
+            ws = sh.add_worksheet(title="ExternalStaff", rows=100, cols=10)
+            ws.update(values=[['name', 'shift', 'date', 'month', 'year', 'timestamp']], range_name='A1')
+        
+        existing_records = ws.get_all_records()
+        existing_keys = set()
+        for r in existing_records:
+            key = (str(r.get('name', '')), str(r.get('shift', '')), str(r.get('date', '')),
+                   str(r.get('month', '')), str(r.get('year', '')))
+            existing_keys.add(key)
+        
+        new_records = []
+        for item in st.session_state.external_staff:
+            key = (str(item.get('name', '')), str(item.get('shift', '')), str(item.get('date', '')),
+                   str(item.get('month', '')), str(item.get('year', '')))
+            if key not in existing_keys:
+                new_records.append(item)
+                existing_keys.add(key)
+        
+        if new_records:
+            next_row = len(existing_records) + 2
+            data = []
+            for item in new_records:
+                row = [item.get('name', ''), item.get('shift', ''), item.get('date', ''),
+                       item.get('month', ''), item.get('year', ''), item.get('timestamp', '')]
+                data.append(row)
+            ws.update(values=data, range_name=f'A{next_row}')
+            st.success(f"✅ เพิ่มข้อมูลคนนอกหน่วยงานใหม่ {len(new_records)} รายการ")
+        else:
+            st.info("ℹ️ ไม่มีข้อมูลคนนอกใหม่ที่ต้องบันทึก")
+    except Exception as e:
+        logger.exception(f"Error saving external staff: {e}")
+        st.error(f"Error saving external staff: {e}")
 
 
 # --- Fix Requests ---
