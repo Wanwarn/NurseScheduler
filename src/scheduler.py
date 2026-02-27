@@ -705,7 +705,7 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         sum(off_after_night_constraints) +
         sum(holiday_morning_bonus) * 25 -  # โบนัสสำหรับ M ในวันหยุด (ทดแทน NS)
         sum(separation_penalty) * 30 -  # ลบคะแนนเมื่อ ER2-ER7 ซ้อนเวรกัน
-        sum(oc_avoid_penalty) * 20 -  # ลบคะแนนเมื่อ ER4, ER8 ทำ OC
+        sum(oc_avoid_penalty) * 100 -  # หักหนัก: เลี่ยงจัดเวร OC ให้ ER4, ER8
         sum(o_before_n_penalty) * 80 -  # ลบคะแนนเมื่อ O→N (หลีกเลี่ยงดึกหลังหยุด)
         sum(n_skip_day_penalty) * 10 -  # ลบคะแนนเมื่อ N-O-N (ดึกสลับวัน)
         sum(ns_avoidance_penalty) * 500 -  # หักหนักๆ ให้ NS เป็นทางเลือกสุดท้าย
