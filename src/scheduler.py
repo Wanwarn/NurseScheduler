@@ -192,6 +192,7 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
     # ==========================================
     o_before_n_penalty = []  # Soft: O → N ควรหลีกเลี่ยง
     n_skip_day_penalty = []  # Soft: N-O-N ควรหลีกเลี่ยง
+    nn_consecutive_penalty = []  # Soft: N→N ควรหลีกเลี่ยง (ยอมได้ถ้าจำเป็น)
     
     for n in nurses:
         # 1. กฎดึกติดกัน - อนุญาต N→N สูงสุด 2 เวร, ห้าม N→N→N (3 ติด)
@@ -205,6 +206,12 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         # ห้ามดึก 3 วันติด (N-N-N) - HARD
         for d in range(1, days_in_month - 1):
             model.Add(shifts_var[(n, d, 'N')] + shifts_var[(n, d + 1, 'N')] + shifts_var[(n, d + 2, 'N')] <= 2)
+        
+        # Soft: เลี่ยง N→N ดึกติดกัน (ยอมได้แต่หักคะแนน)
+        for d in range(1, days_in_month):
+            nn_pen = model.NewBoolVar(f'nn_pen_{n}_{d}')
+            model.Add(shifts_var[(n, d, 'N')] + shifts_var[(n, d + 1, 'N')] <= 1 + nn_pen)
+            nn_consecutive_penalty.append(nn_pen)
         
         # 2. O-N, O-NS (ควรทำงานก่อนดึก) - SOFT (ลดจุด แต่ยอมได้ถ้าจำเป็น)
         for d in range(1, days_in_month):
@@ -708,6 +715,7 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         sum(oc_avoid_penalty) * 100 -  # หักหนัก: เลี่ยงจัดเวร OC ให้ ER4, ER8
         sum(o_before_n_penalty) * 80 -  # ลบคะแนนเมื่อ O→N (หลีกเลี่ยงดึกหลังหยุด)
         sum(n_skip_day_penalty) * 10 -  # ลบคะแนนเมื่อ N-O-N (ดึกสลับวัน)
+        sum(nn_consecutive_penalty) * 60 -  # ลบคะแนนเมื่อ N→N (ดึกติดกัน)
         sum(ns_avoidance_penalty) * 500 -  # หักหนักๆ ให้ NS เป็นทางเลือกสุดท้าย
         sum(ns_penalty) * 200 -  # หักคะแนน NS excess (เกินจาก ns_target)
         sum(s_o_n_penalty) * 35 -  # Penalty สำหรับ S-O-N (เสียวันหยุดฟรี)
