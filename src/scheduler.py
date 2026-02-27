@@ -556,16 +556,33 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
             holiday_morning_bonus.append(shifts_var[(n, d, 'M')])
     
     # ==========================================
-    # 3.1 วันหยุดของแต่ละคน = วันหยุดของเดือน (เสาร์-อาทิตย์ + นักขัตฤกษ์)
+    # 3.1 วันหยุดของแต่ละคน - คำนวณจากจำนวนเวรจริง (ไม่ใช่ปฏิทิน)
     # ==========================================
-    target_off_days = weekends + holidays_weekday  # ใช้ตัวแปรที่คำนวณไว้แล้วข้างบน
+    # คำนวณจำนวนเวรทั้งหมดต่อวัน แล้วหาจำนวนวันหยุดจริงที่เป็นไปได้
+    total_shifts_needed = 0
+    for d in range(1, days_in_month + 1):
+        wd = calendar.weekday(year, month, d)
+        is_sp = wd >= 5 or is_holiday(year, month, d)
+        day_m = 4 if is_sp else 3
+        total_shifts_needed += day_m + 2 + 1  # M + S(2) + N(1)
     
-    # กำหนดให้ทุกคน (ยกเว้น ER1) มีวันหยุดใกล้เคียงกับ target (±1)
+    num_rotating = len(rotating_nurses)
+    if num_rotating > 0:
+        avg_shifts = total_shifts_needed / num_rotating
+        actual_off_per_nurse = max(0, int(days_in_month - avg_shifts))
+        # ใช้ค่าที่น้อยกว่าระหว่าง calendar-based กับ staffing-based
+        target_off_days = min(weekends + holidays_weekday, actual_off_per_nurse + 2)
+    else:
+        target_off_days = weekends + holidays_weekday
+    
+    logger.info(f"[OFF] Calendar off={weekends + holidays_weekday}, Actual capacity off={actual_off_per_nurse if num_rotating > 0 else 'N/A'}, Target off={target_off_days}")
+    
+    # กำหนดให้ทุกคน (ยกเว้น ER1) มีวันหยุดใกล้เคียงกับ target (±2)
     for n in rotating_nurses:
         off_days = sum(shifts_var[(n, d, 'O')] for d in range(1, days_in_month + 1))
-        # RELAXED: Off อนุญาตให้ต่างจาก target ได้ ±1 วัน
-        model.Add(off_days >= target_off_days - 1)
-        model.Add(off_days <= target_off_days + 1)
+        # RELAXED: Off อนุญาตให้ต่างจาก target ได้ ±2 วัน
+        model.Add(off_days >= max(0, target_off_days - 2))
+        model.Add(off_days <= target_off_days + 2)
     
     # ==========================================
     # 3.2 เกลี่ยวันหยุดพิเศษ (ส-อา + นักขัตฤกษ์) ให้ทุกคนได้หมุนเวียนเท่ากัน
