@@ -26,7 +26,8 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
     
     # เพิ่ม NS (บ่าย+ดึก 16 ชม.) เป็น OT shift, OC = On-Call Standby
     shifts = ['S', 'M', 'N', 'O', 'L_T', 'NS', 'OC'] 
-    work_shifts = ['S', 'M', 'N', 'L_T', 'NS']  # NS นับเป็นวันทำงาน (OC ไม่นับ)
+    work_shifts = ['S', 'M', 'N', 'L_T', 'NS']  # NS นับเป็นวันทำงาน (OC ไม่นับสำหรับเกลี่ยเวร)
+    active_shifts = ['S', 'M', 'N', 'L_T', 'NS', 'OC']  # รวม OC สำหรับนับวันทำงานต่อเนื่อง (พยาบาลยังต้องอยู่เวร)
     
     # กลุ่มพยาบาลสำหรับเวร OC (On-Call วันที่ 1-10)
     oc_hard_ban = ['ER1', 'ER7']      # Hard: ห้ามเด็ดขาด
@@ -285,18 +286,18 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
     seven_day_streak_penalty = []
     
     for n in nurses:
-        # HARD: ห้ามเกิน 7 วันทำงานติดต่อกัน (ตรวจสอบทุกช่วง 8 วัน)
+        # HARD: ห้ามเกิน 7 วันทำงานติดต่อกัน (ตรวจสอบทุกช่วง 8 วัน) - รวม OC เป็นวันทำงาน
         for d in range(1, days_in_month - 6):  # d ถึง d+7 (8 วัน)
             # ใน 8 วันติดต่อกัน ต้องมีวันหยุดอย่างน้อย 1 วัน (= ทำงานได้สูงสุด 7 วัน)
-            model.Add(sum(sum(shifts_var[(n, d + k, s)] for s in work_shifts) for k in range(8)) <= 7)
+            model.Add(sum(sum(shifts_var[(n, d + k, s)] for s in active_shifts) for k in range(8)) <= 7)
         
         # เช็คท้ายเดือนด้วย (8 วันย้อนหลังจากวันสุดท้าย)
         for d in range(max(8, days_in_month - 6), days_in_month + 1):
-            model.Add(sum(sum(shifts_var[(n, d - k, s)] for s in work_shifts) for k in range(8)) <= 7)
+            model.Add(sum(sum(shifts_var[(n, d - k, s)] for s in active_shifts) for k in range(8)) <= 7)
         
         # SOFT: prefer ไม่เกิน 6 วันติด (ให้คะแนนติดลบถ้าทำ 7 วันติด)
         for d in range(1, days_in_month - 5):  # d ถึง d+6 (7 วัน)
-            work_in_7_days = sum(sum(shifts_var[(n, d + k, s)] for s in work_shifts) for k in range(7))
+            work_in_7_days = sum(sum(shifts_var[(n, d + k, s)] for s in active_shifts) for k in range(7))
             is_7_day_streak = model.NewBoolVar(f'7day_streak_{n}_{d}')
             model.Add(work_in_7_days <= 6 + is_7_day_streak)
             model.Add(work_in_7_days >= 7 * is_7_day_streak)
