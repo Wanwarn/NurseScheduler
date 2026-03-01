@@ -314,13 +314,13 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
                     # นับวันทำงานจากเดือนก่อน
                     prev_work_count = sum(
                         1 for s in prev_shifts[-days_from_prev:] 
-                        if s in ['S', 'M', 'N', 'L_T', 'NS']
+                        if s in ['S', 'M', 'N', 'L_T', 'NS', 'OC']
                     )
                     
                     # จำกัดวันทำงานเดือนนี้ให้ไม่เกิน 7 - prev_work_count
                     max_curr_work = max(0, 7 - prev_work_count)
                     model.Add(
-                        sum(sum(shifts_var[(n, k, s)] for s in work_shifts) 
+                        sum(sum(shifts_var[(n, k, s)] for s in active_shifts) 
                             for k in range(1, d + 1)) <= max_curr_work
                     )
     
@@ -329,7 +329,7 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         for d in range(8, days_in_month + 1):
             # ถ้า 7 วันก่อนหน้าทำงานทั้งหมด แล้ววันนี้เป็น NS = เกิน!
             # ดังนั้น ถ้าจะทำ NS ต้องมี Off อย่างน้อย 1 วันใน 7 วันก่อนหน้า
-            prev_work = sum(sum(shifts_var[(n, d - k, s)] for s in ['S', 'M', 'N', 'NS']) for k in range(1, 8))
+            prev_work = sum(sum(shifts_var[(n, d - k, s)] for s in active_shifts) for k in range(1, 8))
             # ถ้าทำงาน 7 วันก่อนหน้า (prev_work=7) แล้ว NS ห้าม
             model.Add(prev_work + shifts_var[(n, d, 'NS')] <= 7)
 
