@@ -1271,7 +1271,7 @@ def _solve_schedule_legacy(year, month, days_in_month, nurses, requests, fix_req
     for n in nurses_for_ns:
         ns_total = sum(shifts_var[(n, d, 'NS')] for d in range(1, days_in_month + 1))
         # [แก้] เปลี่ยนเป็น Soft Constraint - เกินได้แต่โดนหักคะแนน
-        # model.Add(ns_total <= ns_target)  # <-- เดิม Hard, ตอนนี้ลบออก
+        model.Add(ns_total <= ns_target)  # <-- เดิม Hard, ตอนนี้ลบออก
         
         # สร้างตัวแปรส่วนเกิน (Excess)
         ns_excess = model.NewIntVar(0, days_in_month, f'ns_excess_{n}')
