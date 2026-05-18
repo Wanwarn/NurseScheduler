@@ -7,7 +7,7 @@ import pytz
 import calendar
 
 # --- App Version ---
-APP_VERSION = "2.7.0"  # อัปเดต: 2026-02-27 - Refactor + Bug fixes (ns_penalty, bare except, Leave_Train)
+APP_VERSION = "2.8.0"  # อัปเดต: 2026-05-18 - Major refactor: ลบ legacy solver, ลบ duplicate code, ใช้ src/ modules
 
 # --- Thai Timezone Helper ---
 def get_thai_time():

@@ -556,10 +556,10 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
     holiday_morning_bonus = []
     weekend_days = [d for d in range(1, days_in_month + 1) if calendar.weekday(year, month, d) >= 5]
     holiday_days = THAI_HOLIDAYS.get(year, {}).get(month, [])
-    special_days = list(set(weekend_days + holiday_days))
+    special_days_for_bonus = list(set(weekend_days + holiday_days))
     
     for n in rotating_nurses:
-        for d in special_days:
+        for d in special_days_for_bonus:
             # ให้คะแนนบวกสำหรับ M ในวันหยุด (ทดแทน NS)
             holiday_morning_bonus.append(shifts_var[(n, d, 'M')])
     
