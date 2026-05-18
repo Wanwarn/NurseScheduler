@@ -302,27 +302,7 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
             model.Add(work_in_6_days <= 5 + is_6_day_streak)
             model.Add(work_in_6_days >= 6 * is_6_day_streak)
             six_day_streak_penalty.append(is_6_day_streak)
-        
-        # กรณีข้ามเดือน: วันที่ 1-6 ต้องรวมข้อมูลจากเดือนก่อน
-        if prev_month_data and n in prev_month_data:
-            prev_shifts = prev_month_data[n]  # 7 วันสุดท้ายของเดือนก่อน
-            
-            for d in range(1, min(7, days_in_month + 1)):
-                days_from_prev = max(0, 7 - d)  # จำนวนวันที่ต้องดูจากเดือนก่อน
-                
-                if days_from_prev > 0 and days_from_prev <= len(prev_shifts):
-                    # นับวันทำงานจากเดือนก่อน
-                    prev_work_count = sum(
-                        1 for s in prev_shifts[-days_from_prev:] 
-                        if s in ['S', 'M', 'N', 'L_T', 'NS', 'OC']
-                    )
-                    
-                    # จำกัดวันทำงานเดือนนี้ให้ไม่เกิน 6 - prev_work_count
-                    max_curr_work = max(0, 6 - prev_work_count)
-                    model.Add(
-                        sum(sum(shifts_var[(n, k, s)] for s in active_shifts) 
-                            for k in range(1, d + 1)) <= max_curr_work
-                    )
+        # กรณีข้ามเดือน: ดูแลที่ส่วน cross-month constraints ด้านบน (lines 66-90) แล้ว
     
     # ป้องกัน NS หลังทำงานติด 6 วัน (เพราะ NS = 2 เวร จะทำให้เกิน)
     for n in nurses_for_ns:
