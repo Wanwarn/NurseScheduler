@@ -235,27 +235,9 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
     # ==========================================
     # 4. กฎช่วงวันลา/อบรม (Leave/Train Boundary Constraints)
     # ==========================================
+    # NOTE: L_T boundary bonus จะถูกเพิ่มภายหลังใน section "Post L_T Boundary"
+    # หลังจาก allowed_lt ถูก populate แล้ว
     lt_boundary_bonus = []
-    for n in nurses:
-        for d in range(1, days_in_month):
-            # 4.1 Before L_T: HARD ห้าม S ก่อน L_T
-            model.Add(shifts_var[(n, d, 'S')] + shifts_var[(n, d + 1, 'L_T')] <= 1)
-            
-            # 4.1 Before L_T: SOFT Prefer O ก่อน L_T
-            is_o_before_lt = model.NewBoolVar(f'o_before_lt_{n}_{d}')
-            model.Add(shifts_var[(n, d, 'O')] + shifts_var[(n, d + 1, 'L_T')] <= 1 + is_o_before_lt)
-            model.Add(shifts_var[(n, d, 'O')] + shifts_var[(n, d + 1, 'L_T')] >= 2 * is_o_before_lt)
-            lt_boundary_bonus.append(is_o_before_lt)
-
-            # 4.2 After L_T: HARD ห้าม N และ NS หลัง L_T
-            model.Add(shifts_var[(n, d, 'L_T')] + shifts_var[(n, d + 1, 'N')] <= 1)
-            model.Add(shifts_var[(n, d, 'L_T')] + shifts_var[(n, d + 1, 'NS')] <= 1)
-            
-            # 4.2 After L_T: SOFT Prefer O หลัง L_T
-            is_o_after_lt = model.NewBoolVar(f'o_after_lt_{n}_{d}')
-            model.Add(shifts_var[(n, d, 'L_T')] + shifts_var[(n, d + 1, 'O')] <= 1 + is_o_after_lt)
-            model.Add(shifts_var[(n, d, 'L_T')] + shifts_var[(n, d + 1, 'O')] >= 2 * is_o_after_lt)
-            lt_boundary_bonus.append(is_o_after_lt)
 
     # ==========================================
     # กฎเวร NS (บ่าย+ดึก 16 ชม.) - OT Shift
@@ -508,6 +490,31 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
         for d in range(1, days_in_month + 1):
             if (n, d) not in allowed_lt:
                 model.Add(shifts_var[(n, d, 'L_T')] == 0)
+
+    # ==========================================
+    # 4. Post L_T Boundary - ใช้เฉพาะวันที่มีคำขอลาจริง
+    # ==========================================
+    for (nurse, lt_day) in allowed_lt:
+        # 4.1 Before L_T (วันก่อนลา): ห้าม S ก่อน L_T (HARD)
+        if lt_day > 1:
+            model.Add(shifts_var[(nurse, lt_day - 1, 'S')] + shifts_var[(nurse, lt_day, 'L_T')] <= 1)
+            
+            # SOFT: Prefer O ก่อน L_T (โบนัส)
+            is_o_before = model.NewBoolVar(f'o_before_lt_{nurse}_{lt_day}')
+            model.Add(shifts_var[(nurse, lt_day - 1, 'O')] >= is_o_before)
+            model.Add(shifts_var[(nurse, lt_day, 'L_T')] >= is_o_before)
+            lt_boundary_bonus.append(is_o_before)
+        
+        # 4.2 After L_T (วันหลังลา): ห้าม N และ NS หลัง L_T (HARD)
+        if lt_day < days_in_month:
+            model.Add(shifts_var[(nurse, lt_day, 'L_T')] + shifts_var[(nurse, lt_day + 1, 'N')] <= 1)
+            model.Add(shifts_var[(nurse, lt_day, 'L_T')] + shifts_var[(nurse, lt_day + 1, 'NS')] <= 1)
+            
+            # SOFT: Prefer O หลัง L_T (โบนัส)
+            is_o_after = model.NewBoolVar(f'o_after_lt_{nurse}_{lt_day}')
+            model.Add(shifts_var[(nurse, lt_day + 1, 'O')] >= is_o_after)
+            model.Add(shifts_var[(nurse, lt_day, 'L_T')] >= is_o_after)
+            lt_boundary_bonus.append(is_o_after)
 
     # ==========================================
     # 3. ระบบเกลี่ยเวร (Fairness Logic)
