@@ -28,7 +28,7 @@ from src.utils import extract_nurse_id, get_week_occurrence
 # Google Sheet URL for display in sidebar
 SHEET_URL = get_sheet_url()
 
-def diagnose_scheduling_issues(year, month, days_in_month, nurses, requests, staffing_overrides, enable_oc, fix_requests=None):
+def diagnose_scheduling_issues(year, month, days_in_month, nurses, requests, staffing_overrides, enable_oc, fix_requests=None, oc_1_10=True, oc_11_20=False, oc_21_end=False):
     """วิเคราะห์ปัญหาที่อาจทำให้จัดตารางไม่ได้"""
     if fix_requests is None:
         fix_requests = []
@@ -81,8 +81,9 @@ def diagnose_scheduling_issues(year, month, days_in_month, nurses, requests, sta
                     elif override.get('shift') == 'S':
                         req_s = override.get('count', 2)
         
-        # OC ต้องการอีก 1 คน (ถ้าเปิดใช้งาน และเป็นวันที่ 1-10)
-        req_oc = 1 if enable_oc and d <= 10 else 0
+        # OC ต้องการอีก 1 คน (ถ้าเปิดใช้งานใน ช่วงวันที่นั้น)
+        is_oc_active_day = (1 <= d <= 10 and oc_1_10) or (11 <= d <= 20 and oc_11_20) or (21 <= d <= days_in_month and oc_21_end)
+        req_oc = 1 if (enable_oc and is_oc_active_day) else 0
         
         # ต้องการอย่างน้อย M + S + N + OC (แม้จะซ้อนได้บางส่วน แต่ใช้ประมาณการ)
         min_needed = req_m + req_s + req_n + req_oc
@@ -209,7 +210,7 @@ if not check_password():
     st.stop()
 
 st.title("🏥 ระบบจัดตารางเวรพยาบาล (ER_KPH)")
-st.caption(f"**v{APP_VERSION}** | ER7 Contract | ER1 Holiday fix | NS=2 | 🔐 Protected")
+st.caption(f"**v{APP_VERSION}** | 48h/week limit | 3-period OC | Safety Toggles | L_T boundary | 🔐 Protected")
 
 # Session State
 if 'schedule_df' not in st.session_state: st.session_state.schedule_df = None
@@ -361,9 +362,30 @@ with st.sidebar:
             st.success(f"✅ หยุดวันพิเศษ: {len(special_off_requests)}/{weeks_in_month * 2} | ลา/ประชุม: {leave_count} | Fix: {fix_count}/{weeks_in_month * 3}")
     
     st.markdown("---")
+    st.header("🚫 กฎความปลอดภัย (Safety Toggles)")
+    strict_48hrs = st.checkbox(
+        "🚫 ห้ามทำงานเกิน 48 ชม./สัปดาห์", 
+        value=True, 
+        help="นับชั่วโมงรวมทุกช่วง 7 วันย้อนหลัง (M,S,N,L_T=8ชม., NS=16ชม.) | ปิด = ยอมให้เกินได้แต่หักคะแนนหนัก"
+    )
+    strict_smn = st.checkbox(
+        "🚫 ห้ามบ่ายต่อเช้าต่อดึก (S -> M -> N)", 
+        value=True, 
+        help="ห้ามเข้าเวร บ่าย -> เช้า -> ดึก ใน 3 วันติดกัน | ปิด = ยอมได้แต่หักคะแนน"
+    )
+    strict_nn = st.checkbox(
+        "🚫 ห้ามดึกติดกันเด็ดขาด (N -> N)", 
+        value=False, 
+        help="ปิด = อนุญาตดึกติดกันได้ไม่เกิน 2 วัน และวันที่ 3 ต้องเป็นวันหยุด (O) หรือบ่าย (S) เท่านั้น"
+    )
+
+    st.markdown("---")
     st.header("📞 เวร On-Call (OC)")
-    enable_oc = st.checkbox("เปิดใช้งานเวร On-Call (วันที่ 1-10)", value=False, 
-                            help="เวร OC = Standby ดึก 400 บาท/เวร | ER1,ER7 ห้ามทำ | ER4,ER8 ขอเลี่ยง")
+    st.caption("เวร OC = Standby ดึก 400 บาท/เวร | ER1, ER7 ห้ามทำ | ER4, ER8 ขอเลี่ยง")
+    oc_1_10 = st.checkbox("เปิดใช้งานเวร OC (วันที่ 1-10)", value=False)
+    oc_11_20 = st.checkbox("เปิดใช้งานเวร OC (วันที่ 11-20)", value=False)
+    oc_21_end = st.checkbox("เปิดใช้งานเวร OC (วันที่ 21-สิ้นเดือน)", value=False)
+    enable_oc = oc_1_10 or oc_11_20 or oc_21_end
     
     st.markdown("---")
     st.header("🌙 เวร NS (OT)")
@@ -912,7 +934,11 @@ with st.sidebar:
                 st.session_state.requests,
                 st.session_state.fix_requests, st.session_state.staffing_overrides,
                 enable_oc=enable_oc, prev_month_data=prev_month_data, ns_target=ns_target,
-                external_staff=st.session_state.external_staff
+                external_staff=st.session_state.external_staff,
+                strict_48hrs=strict_48hrs,
+                oc_1_10=oc_1_10, oc_11_20=oc_11_20, oc_21_end=oc_21_end,
+                strict_smn=strict_smn,
+                strict_nn=strict_nn
             )
             if df is not None:
                 st.session_state.schedule_df = df
@@ -924,7 +950,8 @@ with st.sidebar:
                 issues = diagnose_scheduling_issues(
                     year, month, days_in_month, nurses_list,
                     st.session_state.requests, st.session_state.staffing_overrides, enable_oc,
-                    fix_requests=st.session_state.fix_requests
+                    fix_requests=st.session_state.fix_requests,
+                    oc_1_10=oc_1_10, oc_11_20=oc_11_20, oc_21_end=oc_21_end
                 )
                 
                 if issues:
@@ -941,9 +968,10 @@ with st.sidebar:
                     st.error("💡 จัดตารางไม่สำเร็จ อาจเกิดจาก:")
                     st.markdown("""
                     *   กฎดึกติดกัน (N -> N)
-                    *   กฎบ่ายต่อดึก (S -> M)
+                    *   กฎบ่ายต่อเช้าต่อดึก (S -> M -> N)
                     *   ข้อจำกัดพยาบาลเฉพาะ (ER7 M+ลา <= 10)
-                    *   กฎ 6 วันทำงานติดกัน (≤48 ชม./สัปดาห์)
+                    *   กฎห้ามทำงานเกิน 48 ชม./สัปดาห์
+                    *   เงื่อนไขวันลา/อบรม (L_T boundary)
                     """)
                 
                 # ==========================================
