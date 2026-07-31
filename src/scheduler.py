@@ -388,25 +388,25 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
 
         # ER1 (Hard Fix): จ-พฤ NCD, ศุกร์ M, ส-อา หยุด, วันหยุดนักขัตฤกษ์ หยุด
         # ถ้ามี fix request → override ได้ (บังคับเวรตามที่ขอแทนหยุด)
+        # ถ้ามีคำขอลา/ประชุม (L_T) → ไม่บังคับ O/M เพื่อให้ระบบลง L_T ได้โดยไม่ขัดแย้ง
         is_hol = is_holiday(year, month, d)
         if is_hol or wd in [5, 6]:  # วันหยุดนักขัตฤกษ์ หรือ ส-อา
             if d in er1_fix_days:
                 # มี fix request → บังคับเวรตามที่ขอ (override วันหยุด)
                 model.Add(shifts_var[('ER1', d, er1_fix_days[d])] == 1)
                 logger.info(f"[ER1] Fix override: day {d} → {er1_fix_days[d]} (holiday/weekend)")
-            else:
+            elif d not in er1_leave_days:
                 model.Add(shifts_var[('ER1', d, 'O')] == 1)
         elif wd in [0, 1, 2, 3]:  # จ-พฤ = NCD (แสดงเป็น O ในตาราง)
-            model.Add(shifts_var[('ER1', d, 'O')] == 1)
+            if d not in er1_leave_days:
+                model.Add(shifts_var[('ER1', d, 'O')] == 1)
         elif wd == 4:  # ศุกร์
             # ถ้า ER1 ลาวันศุกร์นี้ → ไม่บังคับ M (จะถูกบังคับ L_T ในส่วน requests ด้านล่าง)
             # ระบบจะจัดคนอื่นมาทำเวร M แทนให้ครบ 3 คน
             if d not in er1_leave_days:
                 model.Add(shifts_var[('ER1', d, 'M')] == 1)
 
-        # ER3 (Soft Fix): วันพุธ พฤหัส ทุกสัปดาห์ (เท่าที่ได้ ไม่เบียดเบียนผู้อื่น)
-        if wd in [2, 3]:  # วันพุธ = 2, วันพฤหัส = 3
-            preferred_constraints.append(shifts_var[('ER3', d, 'M')])
+        # [REMOVED] ER3 (Soft Fix) - ยกเลิกแล้ว User จะใช้ฟังก์ชัน ขอเวร Fix ผ่าน UI แทน
 
         # [REMOVED] ER5 & ER10 pattern - User จะใช้ฟังก์ชัน Fix เวรแทน
 

@@ -11,7 +11,7 @@ def verify_constraints():
     requests = []
 
     print("--- Testing with On-call ENABLED ---")
-    df = solve_schedule(year, month, days_in_month, nurses, requests, enable_oncall=True)
+    df = solve_schedule(year, month, days_in_month, nurses, requests, enable_oc=True)
 
     if df is not None:
         print("Schedule generated successfully.")
@@ -52,7 +52,7 @@ def verify_constraints():
         print("FAIL: Could not generate schedule.")
 
     print("\n--- Testing with On-call DISABLED ---")
-    df_disabled = solve_schedule(year, month, days_in_month, nurses, requests, enable_oncall=False)
+    df_disabled = solve_schedule(year, month, days_in_month, nurses, requests, enable_oc=False)
     
     if df_disabled is not None:
         oncall_found = False
