@@ -492,7 +492,10 @@ def solve_schedule(year, month, days_in_month, nurses, requests, fix_requests=No
                 if req['type'] == 'Off':
                     # SOFT: พยายามให้หยุดตามขอ แต่ถ้าคนไม่พอ อาจจัดเวรให้แทน
                     # น้ำหนักตามลำดับ: priority 1 = 10 repeats, priority 2 = 9, ... priority 10 = 1
-                    priority = req.get('priority', 1)
+                    try:
+                        priority = int(req.get('priority', 1))
+                    except (ValueError, TypeError):
+                        priority = 1
                     weight = max(1, 11 - priority)  # priority 1 → weight 10, priority 10 → weight 1
                     for _ in range(weight):
                         preferred_constraints.append(shifts_var[(req['nurse'], req['date'], 'O')])
